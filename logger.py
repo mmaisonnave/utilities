@@ -1,6 +1,12 @@
+"""
+Module to initialize and handle the logger.
+"""
 import logging
 import sys
-def init_logger(logger_path):
+def init_logger(logger_path: str):
+    """
+        Function to initialize the logger and return the handler.
+    """
     logging.basicConfig(filename=logger_path, 
                     format='%(asctime)s [%(levelname)s] %(message)s' ,
                     datefmt='%Y-%m-%d %H:%M:%S',
