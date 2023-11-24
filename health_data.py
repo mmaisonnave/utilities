@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from enum import Enum
 import datetime
 from typing import Union
@@ -7,6 +7,10 @@ import numpy as np
 import pandas as pd
 from sklearn.feature_extraction.text import TfidfVectorizer
 from scipy import sparse
+from utilities import configuration
+import json
+from collections import defaultdict
+
 # class syntax
 class ReadmissionCode(Enum):
     PLANNED_READMIT = 1
@@ -158,9 +162,21 @@ class Admission:
         """
         return self.code is None or \
                self.cmg is None or \
+               np.isnan(self.cmg) or \
                self.case_weight is None or \
-               self.admit_date is None
+               np.isnan(self.case_weight) or \
+               self.admit_date is None or \
+               self.readmission_code == ReadmissionCode.NONE or \
+               self.gender == Gender.NONE or \
+               self.admit_category == AdmitCategory.NONE or \
+               self.main_pt_service is None or \
+               self.mrdx is None or \
+               self.transfusion_given == TransfusionGiven.NONE 
+               
 
+    def __iter__(self: Self):
+        return ((field.name, getattr(self, field.name)) for field in fields(self))
+    
     def __post_init__(self):
         if not self.admit_date is None:
             assert self.admit_date <= self.discharge_date
@@ -243,6 +259,7 @@ class Admission:
                         )
         return admission
     
+
     def __repr__(self: Self,)->str:
         repr_ = f"<Admission Patient_code='{self.code}' "\
             f"admit='{self.admit_date.date()}' "\
@@ -252,67 +269,109 @@ class Admission:
             repr_ = repr_[:-13] + f'readmited({self.readmission.admit_date.date()},{self.readmission.discharge_date.date()},{self.readmission.readmission_code})>'
         return repr_
 
-
-    @staticmethod
-    def continuos_matrix(admissions: list[Self])->np.ndarray:
-        return np.vstack([ admission.continuos_vector for admission in admissions])
-    @staticmethod
-    def categorical_matrix(admissions: list[Self])->np.ndarray:
-        return np.vstack([ admission.categorical_vector for admission in admissions])
     
     @staticmethod
-    def create_codes_matrix(admissions: list[Self])->(np.ndarray, sparse._csr.csr_matrix):
+    def diagnosis_codes_features(admissions: list[Self], vocabulary=None, use_idf:bool = False)->(np.ndarray, sparse._csr.csr_matrix):
         codes = [' '.join(admission.diagnosis.codes) for admission in admissions]
-        vectorizer = TfidfVectorizer(use_idf=False).fit(codes)
-        print(f'Number of features={len(vectorizer.get_feature_names_out())}')
+        if vocabulary is None:
+            vectorizer = TfidfVectorizer(use_idf=use_idf).fit(codes)
+        else:
+            vectorizer = TfidfVectorizer(use_idf=use_idf, vocabulary=vocabulary).fit(codes)
+
+        return vectorizer.get_feature_names_out(), vectorizer.transform(codes)
+    
+    @staticmethod
+    def intervention_codes_features(admissions: list[Self], vocabulary=None, use_idf:bool = False)->(np.ndarray, sparse._csr.csr_matrix):
+        codes = [' '.join(admission.intervention_code) for admission in admissions]
+        if vocabulary is None:
+            vectorizer = TfidfVectorizer(use_idf=use_idf).fit(codes)
+        else:
+            vectorizer = TfidfVectorizer(use_idf=use_idf, vocabulary=vocabulary).fit(codes)
         return vectorizer.get_feature_names_out(), vectorizer.transform(codes)
 
-        
     @staticmethod
-    def continuos_columns() -> list[str]:
-        return ['Length of Stay', 'Case Weight', 'CMG', 'Age', 'ALC Days']
-    @staticmethod
-    def categorical_columns() -> list[str]:
-        return ['Male', 
-                'Female', 
-                'Elective Admission', 
-                'New Born Admission', 
-                'Urgent Admission', 
-                'Transfusion Given', 
-                'Level 1 Comorbidity',
-                'Level 2 Comorbidity',
-                'Level 3 Comorbidity',
-                'Level 4 Comorbidity',
-                'No Comorbidity',
-                'Is ALC',
-                'Is central Zone'
-                ]
-    @property
-    def continuos_vector(self: Self,) -> np.ndarray:
-        return np.array([self.length_of_stay, 
-                        self.case_weight, 
-                        self.cmg, 
-                        self.age, 
-                        self.alc_days,
-                        ])
+    def categorical_features(admissions: list[Self],main_pt_services_list=None) -> pd.DataFrame:
+        columns = ['male', 
+                   'female', 
+                   'transfusion given', 
+                   'is alc',
+                   'is central zone',
+                   'elective admission',
+                   'new born admission',
+                   'urgent admission',
+                   'level 1 comorbidity',
+                   'level 2 comorbidity',
+                   'level 3 comorbidity',
+                   'level 4 comorbidity',
+                   ]
+        if main_pt_services_list is None:
+            main_pt_services_list = list(set([admission.main_pt_service for admission in admissions]))[:-1]
+        service2idx = dict([(service,ix+len(columns)) for ix,service in enumerate(main_pt_services_list)])
+        columns = columns + main_pt_services_list
+
+        vectors = []
+        for admission in admissions:
+            vector = [1 if admission.gender.is_male else 0,
+                     1 if admission.gender.is_female else 0,
+                     1 if admission.transfusion_given.received_transfusion else 0,
+                     1 if admission.alc_days > 0 else 0,
+                     1 if admission.is_central_zone else 0,
+                     1 if admission.admit_category==AdmitCategory.ELECTIVE else 0,
+                     1 if admission.admit_category==AdmitCategory.NEW_BORN else 0,
+                     1 if admission.admit_category==AdmitCategory.URGENT else 0,
+                    #  1 if admission.comorbidity_level==ComorbidityLevel.NO_COMORBIDITY else 0,      # 8
+                     1 if admission.comorbidity_level==ComorbidityLevel.LEVEL_1_COMORBIDITY else 0, # 8
+                     1 if admission.comorbidity_level==ComorbidityLevel.LEVEL_2_COMORBIDITY else 0, # 9
+                     1 if admission.comorbidity_level==ComorbidityLevel.LEVEL_3_COMORBIDITY else 0, # 10
+                     1 if admission.comorbidity_level==ComorbidityLevel.LEVEL_4_COMORBIDITY else 0, # 11
+                    ]
+            if admission.comorbidity_level==ComorbidityLevel.LEVEL_2_COMORBIDITY:
+                assert vector[8]==0 and vector[9] == 1 and vector[10] == 0 and vector[11] == 0
+                vector[8]=1
+            if admission.comorbidity_level==ComorbidityLevel.LEVEL_3_COMORBIDITY:
+                assert vector[8]==0 and vector[9] == 0 and vector[10] == 1 and vector[11] == 0
+                vector[8]=1
+                vector[9]=1
+            if admission.comorbidity_level==ComorbidityLevel.LEVEL_4_COMORBIDITY:
+                assert vector[8]==0 and vector[9] == 0 and vector[10] == 0 and vector[11] == 1
+                vector[8]=1
+                vector[9]=1
+                vector[10]=1
+            vector = vector + [0]*len(main_pt_services_list)
+            if admission.main_pt_service in service2idx:
+                vector[service2idx[admission.main_pt_service]]=1
+            vectors.append(vector)
+
+        return pd.DataFrame(vectors, columns=columns),main_pt_services_list
 
     @property
-    def categorical_vector(self: Self,) -> np.ndarray:
-        return np.array([1 if self.gender.is_male else 0,
-                         1 if self.gender.is_female else 0,
-                         1 if self.admit_category==AdmitCategory.ELECTIVE else 0,
-                         1 if self.admit_category==AdmitCategory.NEW_BORN else 0,
-                         1 if self.admit_category==AdmitCategory.URGENT else 0,
-                         1 if self.transfusion_given.received_transfusion else 0,
-                         1 if self.comorbidity_level==ComorbidityLevel.LEVEL_1_COMORBIDITY else 0,
-                         1 if self.comorbidity_level==ComorbidityLevel.LEVEL_2_COMORBIDITY else 0,
-                         1 if self.comorbidity_level==ComorbidityLevel.LEVEL_3_COMORBIDITY else 0,
-                         1 if self.comorbidity_level==ComorbidityLevel.LEVEL_4_COMORBIDITY else 0,
-                         1 if self.comorbidity_level==ComorbidityLevel.NO_COMORBIDITY else 0,
-                         1 if self.alc_days>0 else 0,
-                         1 if self.is_central_zone else 0,
-                        ])
+    def is_valid_training_instance(self:Self)->bool:
+        return self.is_valid_testing_instance and not self.has_missing
+    
+    @property
+    def is_valid_testing_instance(self:Self)->bool:
+        return self.admit_category != AdmitCategory.CADAVER and \
+                self.admit_category != AdmitCategory.STILLBORN and \
+                not self.code is None
 
+    @staticmethod
+    def numerical_features(admissions: list[Self],) -> pd.DataFrame:
+        fields = ['age', 'cmg', 'case_weight', 'acute_days', 'alc_days']
+        # assert all([admission.is for admission in admissions])
+        vectors = []
+        for admission in admissions:
+            vectors.append([getattr(admission, field) for field in fields])
+        matrix = np.vstack(vectors)
+
+        df =  pd.DataFrame(matrix, columns=fields)
+
+        # Missing from training are removed, missing from testing are fixed. 
+        # Should not be na values.
+        assert df.dropna().shape[0]==df.shape[0]
+
+        return df
+
+      
     @staticmethod 
     def get_y(admissions: list[Self])->np.ndarray:
         return np.array([1 if admission.has_readmission and \
@@ -356,4 +415,136 @@ class Admission:
         assert self.is_valid_readmission(readmission)
         self.readmission = readmission
 
+    # def fix_missing(self: Self, )-> Self:
+    #     rng = np.random.default_rng(seed=5348363479653547918)
 
+    @staticmethod
+    def get_training_testing_data(filtering=True)->list[Self]:
+        rng = np.random.default_rng(seed=5348363479653547918)
+        config = configuration.get_config()
+
+        # ---------- ---------- ---------- ---------- 
+        # Retriving train testing data from JSON file
+        # ---------- ---------- ---------- ---------- 
+        f = open(config['train_val_json'])
+        train_val_data = json.load(f)
+
+        # ---------- ---------- ---------- ---------- 
+        # Converting JSON to DataClasses
+        # ---------- ---------- ---------- ---------- 
+        all_admissions = []
+        for ix in train_val_data:
+            all_admissions.append(
+                Admission.from_dict_data(admit_id=int(ix), admission=train_val_data[ix])
+                )
+            
+
+
+        # ---------- ---------- ---------- ---------- 
+        # Dictionary organizing data by patient
+        # ---------- ---------- ---------- ---------- 
+        patient2admissions = defaultdict(list)
+        for admission in all_admissions:
+            code = admission.code
+            patient2admissions[code].append(admission)
+
+        # ---------- ---------- ---------- ---------- 
+        # Ordering patient list by discharge date (from back )
+        # ---------- ---------- ---------- ---------- 
+        for patient_code in patient2admissions:
+            admissions_list = patient2admissions[patient_code]
+            admissions_list = sorted(admissions_list, key=lambda admission: admission.discharge_date, reverse=False)
+            assert all([admissions_list[i].discharge_date <= admissions_list[i+1].discharge_date for i in range(len(admissions_list)-1)])
+            patient2admissions[patient_code] = admissions_list
+
+        patient_count=0
+        valid_readmission_count=0
+        for patient_code in patient2admissions:
+            patient_admissions = patient2admissions[patient_code]
+            ix = 0 
+            while ix < len(patient_admissions):
+                readmission_code = patient_admissions[ix].readmission_code
+                if ReadmissionCode.is_readmit(readmission_code):
+                    # Either is not the first admission (ix>0) or 
+                    # we don't have the patient previous admition (readmission close to begining of dataset) (admit-(2015-01-01))<28 days
+                    # assert ix>0 or (patient_admissions[ix].admit_date - datetime.datetime.fromisoformat('2015-01-01')).days<365
+                    if ix>0 and  patient_admissions[ix-1].is_valid_readmission(patient_admissions[ix]):
+                        patient_admissions[ix-1].add_readmission(patient_admissions[ix])
+                        valid_readmission_count+=1
+                ix+=1
+            patient_count+=1
+
+        train_indexes = rng.choice(range(len(all_admissions)),size=int(0.8*len(all_admissions)), replace=False)
+
+        # Checking that every time I am getting the same training instances ( and validation instances)
+        assert all(train_indexes[:3] ==np.array([478898, 46409, 322969]))
+        assert all(train_indexes[-3:] ==np.array([415014, 330673, 338415]))
+        assert hash(tuple(train_indexes))==2028319680436964623
+
+        train_indexes = set(train_indexes)
+
+        train = [admission for ix, admission in enumerate(all_admissions) if ix in train_indexes ]
+        testing = [admission for ix, admission in enumerate(all_admissions) if not ix in train_indexes ]
+
+
+        # ---------- ---------- ---------- ----------
+        # Filtering instances with missing values
+        # ---------- ---------- ---------- ----------
+        # Remove from training instances with missing values or with admit category in {CADAVER, STILLBORN}
+        if filtering:
+            print(f'Training instances before filtering: {len(train)}')
+            train = list(filter(lambda admission: admission.is_valid_training_instance, train))
+            print(f'Training instances after filtering:  {len(train)}')
+
+            # Remove from testing instances without patient code and admit category in {CADAVER, STILLBORN}
+            print(f'Testomg instances before filtering:  {len(testing)}')
+            testing = list(filter(lambda admission: admission.is_valid_testing_instance , testing))
+            print(f'Testomg instances after filtering:   {len(testing)}')
+
+
+        return train, testing
+
+    def fix_missings(self: Self, training: list[Self]):
+        rng = np.random.default_rng(seed=5348363479653547918)
+        assert not self.code is None, 'Cannot fix an entry without code (cannot recover target variable without it).'
+
+        if self.admit_date is None:
+            avg_los = np.average([admission.length_of_stay for admission in training])
+            std_los = np.std([admission.length_of_stay for admission in training])
+            los = int(rng.normal(loc=avg_los, scale=std_los, size=1)[0])
+
+            self.admit_date = self.discharge_date - datetime.timedelta(days=los)
+
+        if self.case_weight is None or np.isnan(self.case_weight):
+            avg_case_weight =  np.average([admission.case_weight for admission in training])
+            std_case_weight =  np.std([admission.case_weight for admission in training])
+
+            self.case_weight = rng.normal(loc=avg_case_weight, scale=std_case_weight, size=1)[0]
+
+        if self.gender  == Gender.NONE:
+            ix = rng.choice(a=range(len(training)), size=1)[0]
+            self.gender = training[ix].gender
+
+        if self.admit_category == AdmitCategory.NONE:
+            ix = rng.choice(a=range(len(training)), size=1)[0]
+            self.admit_category = training[ix].admit_category
+            
+        if self.readmission_code == ReadmissionCode.NONE:
+            ix = rng.choice(a=range(len(training)), size=1)[0]
+            self.readmission_code = training[ix].readmission_code
+
+        if self.transfusion_given == TransfusionGiven.NONE:
+            ix = rng.choice(a=range(len(training)), size=1)[0]
+            self.transfusion_given = training[ix].transfusion_given
+
+        if self.cmg is None or np.isnan(self.cmg):
+            new_cmb = rng.uniform(low=min([admission.cmg for admission in training]), 
+                                high=max([admission.cmg for admission in training]), 
+                                size=1)[0]
+            self.cmg = new_cmb
+
+        if self.main_pt_service is None:
+            self.main_pt_service = '<NONE>'
+
+        if self.mrdx is None:
+            self.mrdx = '<NONE>'
