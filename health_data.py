@@ -492,14 +492,10 @@ class Admission:
         # ---------- ---------- ---------- ----------
         # Remove from training instances with missing values or with admit category in {CADAVER, STILLBORN}
         if filtering:
-            print(f'Training instances before filtering: {len(train)}')
             train = list(filter(lambda admission: admission.is_valid_training_instance, train))
-            print(f'Training instances after filtering:  {len(train)}')
 
             # Remove from testing instances without patient code and admit category in {CADAVER, STILLBORN}
-            print(f'Testomg instances before filtering:  {len(testing)}')
             testing = list(filter(lambda admission: admission.is_valid_testing_instance , testing))
-            print(f'Testomg instances after filtering:   {len(testing)}')
 
 
         return train, testing
