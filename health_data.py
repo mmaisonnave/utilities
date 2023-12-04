@@ -38,7 +38,19 @@ class ReadmissionCode(Enum):
     #         # return 8 <= (readmission_date-discharge_date).days  and (readmission_date-discharge_date).days <= 28
     #         return (readmission_date-discharge_date).days <= 28
         
-            
+    @staticmethod
+    def is_unplanned_readmit(admission_code:Self):
+        """
+        Check if the readmission code is one of the one flagging a readmit.
+
+        Args:
+            self: 
+        Returns:
+            True if the readmit code is one flagging a readmit.
+        """
+        return admission_code in (ReadmissionCode.UNPLANNED_READMIT_8_28,
+                                  ReadmissionCode.UNPLANNED_READMIT_0_7,
+                                  ReadmissionCode.UNPLANNED_FROM_SDS_0_7)   
     @staticmethod
     def is_readmit(admission_code:Self):
         """
@@ -118,6 +130,17 @@ class Diagnosis:
     #         print(f'len types: {self.types}')
     #     assert len(self.codes)==len(self.texts) and len(self.texts)==len(self.types)
 
+
+class EntryCode(Enum):
+    NONE=-1
+    CLINIC_ENTRY = 1
+    DIRECT_ENTRY = 2
+    EMERGENCY_ENTRY = 3
+    NEWBORN_ENTRY = 4
+    DAY_SURGERY_ENTRY=5
+    STILLBORN_ENTRY=6
+
+
 @dataclass
 class Admission:
     admit_id: int
@@ -146,6 +169,7 @@ class Admission:
     institution_type: str
     discharge_unit:str
     is_central_zone: bool
+    entry_code:EntryCode
     readmission: Self
 
     @property
@@ -171,12 +195,12 @@ class Admission:
                self.admit_category == AdmitCategory.NONE or \
                self.main_pt_service is None or \
                self.mrdx is None or \
-               self.transfusion_given == TransfusionGiven.NONE 
-               
+               self.entry_code == EntryCode.NONE or \
+               self.transfusion_given == TransfusionGiven.NONE
 
     def __iter__(self: Self):
         return ((field.name, getattr(self, field.name)) for field in fields(self))
-    
+
     def __post_init__(self):
         if not self.admit_date is None:
             assert self.admit_date <= self.discharge_date
@@ -205,17 +229,18 @@ class Admission:
             admit_category = AdmitCategory.CADAVER
         elif 'Stillborn' in admission['Admit Category']:
             admit_category = AdmitCategory.STILLBORN
-        elif 'urgent' in admission['Admit Category']:
+        else:
+            assert 'urgent' in admission['Admit Category']
             admit_category = AdmitCategory.URGENT
 
         if admission['Transfusion Given'] is None:
             transfusion = TransfusionGiven.NONE
         elif admission['Transfusion Given']=='Yes':
             transfusion = TransfusionGiven.YES
-        elif admission['Transfusion Given']=='No':
+        else:
+            assert admission['Transfusion Given']=='No'
             transfusion = TransfusionGiven.NO
 
-        
         if admission['Gender']=='Male':
             gender=Gender.MALE
         elif admission['Gender']=='Female':
@@ -224,8 +249,25 @@ class Admission:
             gender=Gender.OTHER
         elif admission['Gender']=='Undifferentiated':
             gender=Gender.UNDIFFERENTIATED
-        elif admission['Gender'] is None:
+        else: 
+            assert admission['Gender'] is None
             gender=Gender.NONE
+
+        if admission['Entry Code'] is None:
+            entry_code = EntryCode.NONE
+        elif admission['Entry Code']=='C Clinic from report':
+            entry_code = EntryCode.CLINIC_ENTRY
+        elif admission['Entry Code']=='D Direct':
+            entry_code = EntryCode.DIRECT_ENTRY
+        elif admission['Entry Code']=='E Emergency Departme':
+            entry_code = EntryCode.EMERGENCY_ENTRY
+        elif admission['Entry Code']=='N Newborn':
+            entry_code = EntryCode.NEWBORN_ENTRY
+        elif admission['Entry Code']=='S Stillborn':
+            entry_code = EntryCode.STILLBORN_ENTRY
+        else:
+            assert admission['Entry Code']=='P Day Surgery from r', f"Invalid entry code found: {admission['Entry Code']}."
+            entry_code = EntryCode.DAY_SURGERY_ENTRY
 
         # Readmission code
         comorbidity_level = ComorbidityLevel(int(admission['Comorbidity Level'][0])) if not admission['Comorbidity Level'] is None else ComorbidityLevel.NONE
@@ -255,6 +297,7 @@ class Admission:
                         institution_type = admission['Institution Type'],
                         discharge_unit = admission['Discharge Nurse Unit'],
                         is_central_zone = admission['CZ Status']=='cz',
+                        entry_code = entry_code,
                         readmission=None
                         )
         return admission
@@ -268,13 +311,12 @@ class Admission:
         if not self.readmission is None:
             repr_ = repr_[:-13] + f'readmited({self.readmission.admit_date.date()},{self.readmission.discharge_date.date()},{self.readmission.readmission_code})>'
         return repr_
-
     
     @staticmethod
     def diagnosis_codes_features(admissions: list[Self], vocabulary=None, use_idf:bool = False)->(np.ndarray, sparse._csr.csr_matrix):
         codes = [' '.join(admission.diagnosis.codes) for admission in admissions]
         if vocabulary is None:
-            vectorizer = TfidfVectorizer(use_idf=use_idf).fit(codes)
+            vectorizer = TfidfVectorizer(use_idf=use_idf,).fit(codes)
         else:
             vectorizer = TfidfVectorizer(use_idf=use_idf, vocabulary=vocabulary).fit(codes)
 
@@ -289,23 +331,33 @@ class Admission:
             vectorizer = TfidfVectorizer(use_idf=use_idf, vocabulary=vocabulary).fit(codes)
         return vectorizer.get_feature_names_out(), vectorizer.transform(codes)
 
+    # ---------- ---------- ---------- ---------- ---------- ---------- ---------- ---------- 
+    # CATEGORICAL FEATURES
+    # ---------- ---------- ---------- ---------- ---------- ---------- ---------- ---------- 
     @staticmethod
     def categorical_features(admissions: list[Self],main_pt_services_list=None) -> pd.DataFrame:
-        columns = ['male', 
+        columns = ['male',
                    'female', 
                    'transfusion given', 
                    'is alc',
                    'is central zone',
                    'elective admission',
-                   'new born admission',
                    'urgent admission',
                    'level 1 comorbidity',
                    'level 2 comorbidity',
                    'level 3 comorbidity',
                    'level 4 comorbidity',
+                   'Clinic Entry',
+                   'Direct Entry',
+                   'Emergency Entry',
+                   'Day Surgery Entry',
+                   'New Acute Patient',
+                   'Panned Readmit',
+                   'Unplanned Readmit',
                    ]
         if main_pt_services_list is None:
-            main_pt_services_list = list(set([admission.main_pt_service for admission in admissions]))[:-1]
+            main_pt_services_list = list(set([admission.main_pt_service for admission in admissions]))
+
         service2idx = dict([(service,ix+len(columns)) for ix,service in enumerate(main_pt_services_list)])
         columns = columns + main_pt_services_list
 
@@ -317,27 +369,38 @@ class Admission:
                      1 if admission.alc_days > 0 else 0,
                      1 if admission.is_central_zone else 0,
                      1 if admission.admit_category==AdmitCategory.ELECTIVE else 0,
-                     1 if admission.admit_category==AdmitCategory.NEW_BORN else 0,
+                    #  1 if admission.admit_category==AdmitCategory.NEW_BORN else 0,
                      1 if admission.admit_category==AdmitCategory.URGENT else 0,
                     #  1 if admission.comorbidity_level==ComorbidityLevel.NO_COMORBIDITY else 0,      # 8
-                     1 if admission.comorbidity_level==ComorbidityLevel.LEVEL_1_COMORBIDITY else 0, # 8
-                     1 if admission.comorbidity_level==ComorbidityLevel.LEVEL_2_COMORBIDITY else 0, # 9
-                     1 if admission.comorbidity_level==ComorbidityLevel.LEVEL_3_COMORBIDITY else 0, # 10
-                     1 if admission.comorbidity_level==ComorbidityLevel.LEVEL_4_COMORBIDITY else 0, # 11
+                     1 if admission.comorbidity_level==ComorbidityLevel.LEVEL_1_COMORBIDITY else 0, # 7
+                     1 if admission.comorbidity_level==ComorbidityLevel.LEVEL_2_COMORBIDITY else 0, # 8
+                     1 if admission.comorbidity_level==ComorbidityLevel.LEVEL_3_COMORBIDITY else 0, # 9
+                     1 if admission.comorbidity_level==ComorbidityLevel.LEVEL_4_COMORBIDITY else 0, # 10
+                     1 if admission.entry_code==EntryCode.CLINIC_ENTRY else 0,
+                     1 if admission.entry_code==EntryCode.DIRECT_ENTRY else 0,
+                     1 if admission.entry_code==EntryCode.EMERGENCY_ENTRY else 0,
+                     1 if admission.entry_code==EntryCode.DAY_SURGERY_ENTRY else 0,
+                    #  1 if admission.entry_code==EntryCode.NEWBORN_ENTRY else 0,
+                     1 if admission.readmission_code==ReadmissionCode.NEW_ACUTE_PATIENT else 0,
+                     1 if admission.readmission_code==ReadmissionCode.PLANNED_READMIT else 0,
+                     1 if admission.readmission_code.is_unplanned_readmit else 0,
+                    #  1 if admission.readmission_code.OTHER else 0,
+
                     ]
             if admission.comorbidity_level==ComorbidityLevel.LEVEL_2_COMORBIDITY:
-                assert vector[8]==0 and vector[9] == 1 and vector[10] == 0 and vector[11] == 0
-                vector[8]=1
+                assert vector[7]==0 and vector[8] == 1 and vector[9] == 0 and vector[10] == 0
+                vector[7]=1
             if admission.comorbidity_level==ComorbidityLevel.LEVEL_3_COMORBIDITY:
-                assert vector[8]==0 and vector[9] == 0 and vector[10] == 1 and vector[11] == 0
+                assert vector[7]==0 and vector[8] == 0 and vector[9] == 1 and vector[10] == 0
+                vector[7]=1
                 vector[8]=1
-                vector[9]=1
             if admission.comorbidity_level==ComorbidityLevel.LEVEL_4_COMORBIDITY:
-                assert vector[8]==0 and vector[9] == 0 and vector[10] == 0 and vector[11] == 1
+                assert vector[7]==0 and vector[8] == 0 and vector[9] == 0 and vector[10] == 1
+                vector[7]=1
                 vector[8]=1
                 vector[9]=1
-                vector[10]=1
             vector = vector + [0]*len(main_pt_services_list)
+
             if admission.main_pt_service in service2idx:
                 vector[service2idx[admission.main_pt_service]]=1
             vectors.append(vector)
@@ -354,6 +417,9 @@ class Admission:
                 self.admit_category != AdmitCategory.STILLBORN and \
                 not self.code is None
 
+    # ---------- ---------- ---------- ---------- ---------- ---------- ---------- ---------- 
+    # NUMERICAL FEATURES
+    # ---------- ---------- ---------- ---------- ---------- ---------- ---------- ---------- 
     @staticmethod
     def numerical_features(admissions: list[Self],) -> pd.DataFrame:
         fields = ['age', 'cmg', 'case_weight', 'acute_days', 'alc_days']
@@ -371,8 +437,18 @@ class Admission:
 
         return df
 
-      
-    @staticmethod 
+    @staticmethod
+    def get_diagnoses_mapping():
+        config = configuration.get_config()
+        return json.load(open(config['diagnosis_dict'], encoding='utf-8'))
+
+    
+    @staticmethod
+    def get_intervention_mapping():
+        config = configuration.get_config()
+        return json.load(open(config['intervention_dict'], encoding='utf-8'))
+
+    @staticmethod
     def get_y(admissions: list[Self])->np.ndarray:
         return np.array([1 if admission.has_readmission and \
                      admission.readmission.readmission_code!=ReadmissionCode.PLANNED_READMIT else 0 \
@@ -418,6 +494,9 @@ class Admission:
     # def fix_missing(self: Self, )-> Self:
     #     rng = np.random.default_rng(seed=5348363479653547918)
 
+    # ---------- ---------- ---------- ---------- ---------- ---------- ---------- ---------- 
+    # GET TRAINING AND TESTING DATA
+    # ---------- ---------- ---------- ---------- ---------- ---------- ---------- ---------- 
     @staticmethod
     def get_training_testing_data(filtering=True)->list[Self]:
         rng = np.random.default_rng(seed=5348363479653547918)
@@ -437,8 +516,6 @@ class Admission:
             all_admissions.append(
                 Admission.from_dict_data(admit_id=int(ix), admission=train_val_data[ix])
                 )
-            
-
 
         # ---------- ---------- ---------- ---------- 
         # Dictionary organizing data by patient
@@ -447,15 +524,19 @@ class Admission:
         for admission in all_admissions:
             code = admission.code
             patient2admissions[code].append(admission)
+            
+        # print(set([str(admission.entry_code) for admission in all_admissions]))
 
-        # ---------- ---------- ---------- ---------- 
+        # ---------- ---------- ---------- ----------
         # Ordering patient list by discharge date (from back )
-        # ---------- ---------- ---------- ---------- 
+        # ---------- ---------- ---------- ----------
         for patient_code in patient2admissions:
             admissions_list = patient2admissions[patient_code]
             admissions_list = sorted(admissions_list, key=lambda admission: admission.discharge_date, reverse=False)
             assert all([admissions_list[i].discharge_date <= admissions_list[i+1].discharge_date for i in range(len(admissions_list)-1)])
             patient2admissions[patient_code] = admissions_list
+
+        # print(set([str(admission.entry_code) for admission in all_admissions]))
 
         patient_count=0
         valid_readmission_count=0
@@ -473,6 +554,7 @@ class Admission:
                         valid_readmission_count+=1
                 ix+=1
             patient_count+=1
+        # print(set([str(admission.entry_code) for admission in all_admissions]))
 
         train_indexes = rng.choice(range(len(all_admissions)),size=int(0.8*len(all_admissions)), replace=False)
 
@@ -497,9 +579,12 @@ class Admission:
             # Remove from testing instances without patient code and admit category in {CADAVER, STILLBORN}
             testing = list(filter(lambda admission: admission.is_valid_testing_instance , testing))
 
-
         return train, testing
 
+
+    # ---------- ---------- ---------- ---------- ---------- ---------- ---------- ---------- 
+    # FIX MISSINGS
+    # ---------- ---------- ---------- ---------- ---------- ---------- ---------- ---------- 
     def fix_missings(self: Self, training: list[Self]):
         rng = np.random.default_rng(seed=5348363479653547918)
         assert not self.code is None, 'Cannot fix an entry without code (cannot recover target variable without it).'
@@ -544,3 +629,7 @@ class Admission:
 
         if self.mrdx is None:
             self.mrdx = '<NONE>'
+
+        if self.entry_code  == EntryCode.NONE:
+            ix = rng.choice(a=range(len(training)), size=1)[0]
+            self.entry_code = training[ix].entry_code
