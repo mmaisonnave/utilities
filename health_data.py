@@ -10,6 +10,7 @@ from scipy import sparse
 from utilities import configuration
 import json
 from collections import defaultdict
+from sklearn.preprocessing import StandardScaler
 
 # class syntax
 class ReadmissionCode(Enum):
@@ -65,6 +66,25 @@ class ReadmissionCode(Enum):
                                   ReadmissionCode.UNPLANNED_READMIT_0_7,  
                                   ReadmissionCode.PLANNED_READMIT, 
                                   ReadmissionCode.UNPLANNED_FROM_SDS_0_7)
+    
+    def __str__(self: Self) -> str:
+        representation = ''
+        if self == ReadmissionCode.PLANNED_READMIT:
+            representation = 'Planned Readmit'
+        elif self == ReadmissionCode.NEW_ACUTE_PATIENT:
+            representation = 'New Acute Patient'
+        elif self == ReadmissionCode.OTHER:
+            representation = 'ReadmissionCode:Other'
+        elif self == ReadmissionCode.NONE:
+            representation = 'ReadmissionCode:None'
+        elif self == ReadmissionCode.UNPLANNED_FROM_SDS_0_7:
+            representation = 'Unplanned from SDS'
+        elif self == ReadmissionCode.UNPLANNED_READMIT_0_7:
+            representation = 'Unplanned within 7 days'
+        elif self == ReadmissionCode.UNPLANNED_READMIT_8_28:
+            representation = 'Unplanned 8 to 28 days'
+
+        return representation
 
 # class syntax
 class ComorbidityLevel(Enum):
@@ -76,6 +96,19 @@ class ComorbidityLevel(Enum):
     NOT_APPLICABLE = 8
     NONE=-1
 
+    def __str__(self: Self)->str:
+        representation = ''
+        if self == ComorbidityLevel.NO_COMORBIDITY:
+            representation = 'No Comorbidity'
+        elif self == ComorbidityLevel.LEVEL_1_COMORBIDITY:
+            representation = 'Level 1 Comorbidity'
+        elif self == ComorbidityLevel.LEVEL_2_COMORBIDITY:
+            representation = 'Level 2 Comorbidity'
+        elif self == ComorbidityLevel.LEVEL_3_COMORBIDITY:
+            representation = 'Level 3 Comorbidity'
+        elif self == ComorbidityLevel.LEVEL_4_COMORBIDITY:
+            representation = 'Level 4 Comorbidity'
+        return representation
 
 # # class syntax
 # class CentralZoneStatus(Enum):
@@ -90,6 +123,16 @@ class TransfusionGiven(Enum):
     @property
     def received_transfusion(self: Self,)->bool:
         return self == TransfusionGiven.YES
+    
+    def __str__(self: Self) -> str:
+        representation=''
+        if self == TransfusionGiven.YES:
+            representation = 'Yes'
+        elif self == TransfusionGiven.NO:
+            representation = 'No'
+        elif self == TransfusionGiven.NONE:
+            representation = 'TransfusionGiven:None'
+        return representation
 
 
 class AdmitCategory(Enum):
@@ -99,6 +142,23 @@ class AdmitCategory(Enum):
     STILLBORN = 5
     URGENT = 6 
     NONE = -1
+
+    def __str__(self: Self) -> str:
+        representation=''
+        if self == AdmitCategory.ELECTIVE:
+            representation = 'Elective admit'
+        elif self == AdmitCategory.NEW_BORN:
+            representation = 'Newborn admit'
+        elif self == AdmitCategory.CADAVER:
+            representation = 'Cadaver admit'
+        elif self == AdmitCategory.STILLBORN:
+            representation = 'Stillborn admit'
+        elif self == AdmitCategory.URGENT:
+            representation = 'Urgent admit'
+        elif self == AdmitCategory.NONE:
+            representation = 'AdmitCategory:None'
+
+        return representation
 
 
 class Gender(Enum):
@@ -115,6 +175,20 @@ class Gender(Enum):
     @property
     def is_female(self:Self, )->bool:
         return self == Gender.FEMALE
+    
+    def __str__(self: Self) -> str:
+        representation = ''
+        if self == Gender.MALE:
+            representation = 'Male'
+        elif self == Gender.FEMALE:
+            representation = 'Female'
+        elif self == Gender.UNDIFFERENTIATED:
+            representation = 'Gender:Undifferentiated'
+        elif self == Gender.OTHER:
+            representation = 'Gender:Other'
+        elif self == Gender.NONE:
+            representation = 'Gender:None'
+        return representation
 
 
 @dataclass
@@ -139,6 +213,25 @@ class EntryCode(Enum):
     NEWBORN_ENTRY = 4
     DAY_SURGERY_ENTRY=5
     STILLBORN_ENTRY=6
+
+    def __str__(self: Self) -> str:
+        representation = ''
+
+        if self == EntryCode.NONE:
+            representation = 'EntryCode:None'
+        elif self == EntryCode.CLINIC_ENTRY:
+            representation = 'Clinic Entry'
+        elif self == EntryCode.DIRECT_ENTRY:
+            representation = 'Direct Entry'
+        elif self == EntryCode.EMERGENCY_ENTRY:
+            representation = 'Emergency Entry'
+        elif self == EntryCode.NEWBORN_ENTRY:
+            representation = 'Newborn Entry'
+        elif self == EntryCode.DAY_SURGERY_ENTRY:
+            representation = 'Day Surgery Entry'
+        elif self == EntryCode.STILLBORN_ENTRY:
+            representation = 'Stillborn Entry'
+        return representation
 
 
 @dataclass
@@ -581,6 +674,131 @@ class Admission:
 
         return train, testing
 
+
+    # ---------- ---------- ---------- ---------- ---------- ---------- ---------- ---------- 
+    # ---------- ---------- ---------- ---------- ---------- ---------- ---------- ---------- 
+    @staticmethod
+    def get_train_test_matrices(fix_missing_in_testing=True, 
+                                numerical_features=False, 
+                                remove_outliers=True,
+                                fix_skew=False,
+                                normalize=False,
+                                categorical_features=True,
+                                diagnosis_features=True,
+                                intervention_features=True,
+                                use_idf=False,
+                                ):
+        columns = []
+        params = {'fix_missing_in_testing':fix_missing_in_testing,
+                  'numerical_features': numerical_features,
+                  'remove_outliers':remove_outliers,
+                  'fix_skew': fix_skew,
+                  'normalize': normalize,
+                  'categorical_features': categorical_features,
+                  'diagnosis_features': diagnosis_features,
+                  'intervention_features': intervention_features,
+                  'use_idf': use_idf,
+                  }
+        # ---------- ---------- ---------- ---------- ---------- ---------- ---------- ---------- 
+        # RETRIEVING TRAIN AND TEST
+        # ---------- ---------- ---------- ---------- ---------- ---------- ---------- ---------- 
+        training ,testing = Admission.get_training_testing_data()
+        if params['fix_missing_in_testing']:
+            for admission in testing:
+                admission.fix_missings(training)
+
+        # ---------- ---------- ---------- ---------- ---------- ---------- ---------- ---------- 
+        # TRAINING MATRIX
+        # ---------- ---------- ---------- ---------- ---------- ---------- ---------- ---------- 
+        features = []
+        if params['numerical_features']:
+            numerical_df = Admission.numerical_features(training,)
+            columns += list(numerical_df.columns)
+            if params['remove_outliers']:
+                stds = np.std(numerical_df)
+                mean = np.mean(numerical_df, axis=0)
+                is_outlier=np.sum(numerical_df.values > (mean+4*stds).values, axis=1)>0
+            
+            if params['fix_skew']:
+                numerical_df['case_weight'] = np.log10(numerical_df['case_weight']+1)
+                numerical_df['acute_days'] = np.log10(numerical_df['acute_days']+1)
+                numerical_df['alc_days'] = np.log10(numerical_df['alc_days']+1)
+
+            if params['normalize']:
+                scaler = StandardScaler()
+                if params['remove_outliers']:
+                    scaler.fit(numerical_df.values[~is_outlier,:])
+                else:
+                    scaler.fit(numerical_df.values)
+                numerical_df = pd.DataFrame(scaler.transform(numerical_df.values), columns=numerical_df.columns)
+
+            features.append(sparse.csr_matrix(numerical_df.values))
+
+        if params['categorical_features']:
+            columns += list(numerical_df.columns)
+            categorical_df, main_pt_services_list = Admission.categorical_features(training)
+            features.append(sparse.csr_matrix(categorical_df.values))
+
+        if params['diagnosis_features']:
+            vocab_diagnosis, diagnosis_matrix = Admission.diagnosis_codes_features(training, 
+                                                                                            use_idf=params['use_idf'])
+            features.append(diagnosis_matrix)
+            columns += list(vocab_diagnosis)
+
+
+        if params['intervention_features']:
+            vocab_interventions, intervention_matrix = Admission.intervention_codes_features(training, 
+                                                                                                        use_idf=params['use_idf'])
+            features.append(intervention_matrix)
+            columns += list(vocab_interventions)
+
+
+        if params['remove_outliers']:
+            mask=~is_outlier
+        else:
+            mask = np.ones(shape=(len(training)))==1
+
+        X_train = sparse.hstack([matrix[mask,:] for matrix in features])
+        y_train = Admission.get_y(training)[mask]
+
+
+        # ---------- ---------- ---------- ---------- ---------- ---------- ---------- ---------- 
+        # TESTING MATRIX
+        # ---------- ---------- ---------- ---------- ---------- ---------- ---------- ---------- 
+        features = []
+        if params['numerical_features']:
+            numerical_df = Admission.numerical_features(testing,)
+            
+            if params['fix_skew']:
+                numerical_df['case_weight'] = np.log10(numerical_df['case_weight']+1)
+                numerical_df['acute_days'] = np.log10(numerical_df['acute_days']+1)
+                numerical_df['alc_days'] = np.log10(numerical_df['alc_days']+1)
+
+            if params['normalize']:
+                numerical_df = pd.DataFrame(scaler.transform(numerical_df.values), columns=numerical_df.columns)
+            features.append(sparse.csr_matrix(numerical_df.values))
+
+        if params['categorical_features']:
+            categorical_df,_ = Admission.categorical_features(testing, main_pt_services_list=main_pt_services_list)
+            features.append(sparse.csr_matrix(categorical_df.values))
+
+        if params['diagnosis_features']:
+            vocab_diagnosis, diagnosis_matrix = Admission.diagnosis_codes_features(testing, 
+                                                                                   vocabulary=vocab_diagnosis, 
+                                                                                   use_idf=params['use_idf'])
+            features.append(diagnosis_matrix)
+
+        if params['intervention_features']:
+            vocab_interventions, intervention_matrix = Admission.intervention_codes_features(testing, 
+                                                                                             vocabulary=vocab_interventions, 
+                                                                                             use_idf=params['use_idf']
+                                                                                             )
+            features.append(intervention_matrix)
+
+        X_test = sparse.hstack(features)
+        y_test = Admission.get_y(testing)
+
+        return X_train, y_train, X_test, y_test, columns
 
     # ---------- ---------- ---------- ---------- ---------- ---------- ---------- ---------- 
     # FIX MISSINGS

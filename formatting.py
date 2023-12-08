@@ -9,4 +9,4 @@ def wrap_tabular(latex_table:str)->str:
     caption = r'}\caption{Caption}\label{tab:my_label}'
     end_table = r'\end{table}'
 
-    return table_begin + '\n' + resizebox + '\n' + latex_table + '\n' + caption + '\n' + end_table
+    return table_begin + '\n' + resizebox + '\n' + latex_table + caption + '\n' + end_table
