@@ -4,9 +4,11 @@ Module to handle the configuration yaml configuration file.
 from sklearn.svm import SVC
 from sklearn.tree import DecisionTreeClassifier
 from sklearn.linear_model import LogisticRegression
+from sklearn.linear_model import Lasso
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.neural_network import MLPClassifier
 from sklearn.naive_bayes import GaussianNB, ComplementNB, BernoulliNB
+from imblearn.ensemble import BalancedRandomForestClassifier
 import yaml
 
 def get_config() -> dict:
@@ -17,7 +19,7 @@ def get_config() -> dict:
         config = yaml.safe_load(file)
     return config
 
-def model_from_configuration(params):
+def model_from_configuration(params, random_state):
     if 'class_weight' in params and isinstance(params['class_weight'],dict):
         params['class_weight'] = {float(key):value for key, value in params['class_weight'].items()}
         print(params['class_weight'])
@@ -36,7 +38,7 @@ def model_from_configuration(params):
                    max_iter=params['max_iter'],
                    decision_function_shape=params['decision_function_shape'],
                    break_ties=params['break_ties'],
-                   random_state=params['random_state'],
+                   random_state=random_state,
                    )
     if params['model_name'].startswith('DecisionTreeClassifier'):
         return DecisionTreeClassifier(criterion=params['criterion'],
@@ -46,7 +48,7 @@ def model_from_configuration(params):
                                       min_samples_leaf=params['min_samples_leaf'],
                                       min_weight_fraction_leaf=params['min_weight_fraction_leaf'],
                                       max_features=params['max_features'],
-                                      random_state=params['random_state'],
+                                      random_state=random_state,
                                       max_leaf_nodes=params['max_leaf_nodes'],
                                       min_impurity_decrease=params['min_impurity_decrease'],
                                       class_weight=params['class_weight'],
@@ -60,7 +62,7 @@ def model_from_configuration(params):
                                   fit_intercept=params['fit_intercept'],
                                   intercept_scaling=params['intercept_scaling'],
                                   class_weight=params['class_weight'],
-                                  random_state=params['random_state'],
+                                  random_state=random_state,
                                   solver=params['solver'],
                                   max_iter=params['max_iter'],
                                   multi_class=params['multi_class'],
@@ -82,7 +84,7 @@ def model_from_configuration(params):
                                       bootstrap=params['bootstrap'],
                                       oob_score=params['oob_score'],
                                       n_jobs=params['n_jobs'],
-                                      random_state=params['random_state'],
+                                      random_state=random_state,
                                       verbose=params['verbose'],
                                       warm_start=params['warm_start'],
                                       class_weight=params['class_weight'],
@@ -100,7 +102,7 @@ def model_from_configuration(params):
                              power_t=params['power_t'],
                              max_iter=params['max_iter'],
                              shuffle=params['shuffle'],
-                             random_state=params['random_state'],
+                             random_state=random_state,
                              tol=params['tol'],
                              verbose=params['verbose'],
                              warm_start=params['warm_start'],
@@ -132,3 +134,25 @@ def model_from_configuration(params):
                            fit_prior=params['fit_prior'],
                            class_prior=params['class_prior'],
                           )
+    if params['model_name'].startswith('BalancedRandomForestClassifier'):
+        return BalancedRandomForestClassifier(n_estimators=params['n_estimators'],
+                                              criterion=params['criterion'],
+                                              max_depth=params['max_depth'],
+                                              min_samples_split=params['min_samples_split'],
+                                              min_samples_leaf=params['min_samples_leaf'],
+                                              min_weight_fraction_leaf=params['min_weight_fraction_leaf'],
+                                              max_features=params['max_features'],
+                                              max_leaf_nodes=params['max_leaf_nodes'],
+                                              min_impurity_decrease=params['min_impurity_decrease'],
+                                              bootstrap=params['bootstrap'],
+                                              oob_score=params['oob_score'],
+                                              sampling_strategy=params['sampling_strategy'],
+                                              replacement=params['replacement'],
+                                              n_jobs=params['n_jobs'],
+                                              verbose=params['verbose'],
+                                              warm_start=params['warm_start'],
+                                              class_weight=params['class_weight'],
+                                              ccp_alpha=params['ccp_alpha'],
+                                              max_samples=params['max_samples'],
+                                              random_state=random_state,
+                                              )

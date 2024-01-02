@@ -11,6 +11,13 @@ from utilities import configuration
 import json
 from collections import defaultdict
 from sklearn.preprocessing import StandardScaler
+from sklearn.feature_selection import SelectKBest, f_classif
+
+from imblearn.under_sampling import RandomUnderSampler
+from imblearn.over_sampling import SMOTE
+from imblearn.pipeline import Pipeline
+
+from utilities import logger
 
 # class syntax
 class ReadmissionCode(Enum):
@@ -39,8 +46,8 @@ class ReadmissionCode(Enum):
     #         # return 8 <= (readmission_date-discharge_date).days  and (readmission_date-discharge_date).days <= 28
     #         return (readmission_date-discharge_date).days <= 28
         
-    @staticmethod
-    def is_unplanned_readmit(admission_code:Self):
+    @property
+    def is_unplanned_readmit(self:Self):
         """
         Check if the readmission code is one of the one flagging a readmit.
 
@@ -49,9 +56,9 @@ class ReadmissionCode(Enum):
         Returns:
             True if the readmit code is one flagging a readmit.
         """
-        return admission_code in (ReadmissionCode.UNPLANNED_READMIT_8_28,
-                                  ReadmissionCode.UNPLANNED_READMIT_0_7,
-                                  ReadmissionCode.UNPLANNED_FROM_SDS_0_7)   
+        return self in (ReadmissionCode.UNPLANNED_READMIT_8_28,
+                        ReadmissionCode.UNPLANNED_READMIT_0_7,
+                        ReadmissionCode.UNPLANNED_FROM_SDS_0_7)
     @staticmethod
     def is_readmit(admission_code:Self):
         """
@@ -447,6 +454,7 @@ class Admission:
                    'New Acute Patient',
                    'Panned Readmit',
                    'Unplanned Readmit',
+                   'COVID Pandemic',
                    ]
         if main_pt_services_list is None:
             main_pt_services_list = list(set([admission.main_pt_service for admission in admissions]))
@@ -477,6 +485,7 @@ class Admission:
                      1 if admission.readmission_code==ReadmissionCode.NEW_ACUTE_PATIENT else 0,
                      1 if admission.readmission_code==ReadmissionCode.PLANNED_READMIT else 0,
                      1 if admission.readmission_code.is_unplanned_readmit else 0,
+                     1 if admission.discharge_date >= datetime.datetime(2020,3,5) else 0 # First case of community transmission
                     #  1 if admission.readmission_code.OTHER else 0,
 
                     ]
@@ -678,27 +687,18 @@ class Admission:
     # ---------- ---------- ---------- ---------- ---------- ---------- ---------- ---------- 
     # ---------- ---------- ---------- ---------- ---------- ---------- ---------- ---------- 
     @staticmethod
-    def get_train_test_matrices(fix_missing_in_testing=True, 
-                                numerical_features=False, 
-                                remove_outliers=True,
-                                fix_skew=False,
-                                normalize=False,
-                                categorical_features=True,
-                                diagnosis_features=True,
-                                intervention_features=True,
-                                use_idf=False,
-                                ):
+    def get_train_test_matrices(params):
         columns = []
-        params = {'fix_missing_in_testing':fix_missing_in_testing,
-                  'numerical_features': numerical_features,
-                  'remove_outliers':remove_outliers,
-                  'fix_skew': fix_skew,
-                  'normalize': normalize,
-                  'categorical_features': categorical_features,
-                  'diagnosis_features': diagnosis_features,
-                  'intervention_features': intervention_features,
-                  'use_idf': use_idf,
-                  }
+        # params = {'fix_missing_in_testing':fix_missing_in_testing,
+        #           'numerical_features': numerical_features,
+        #           'remove_outliers':remove_outliers,
+        #           'fix_skew': fix_skew,
+        #           'normalize': normalize,
+        #           'categorical_features': categorical_features,
+        #           'diagnosis_features': diagnosis_features,
+        #           'intervention_features': intervention_features,
+        #           'use_idf': use_idf,
+        #           }
         # ---------- ---------- ---------- ---------- ---------- ---------- ---------- ---------- 
         # RETRIEVING TRAIN AND TEST
         # ---------- ---------- ---------- ---------- ---------- ---------- ---------- ---------- 
@@ -735,8 +735,8 @@ class Admission:
             features.append(sparse.csr_matrix(numerical_df.values))
 
         if params['categorical_features']:
-            columns += list(numerical_df.columns)
             categorical_df, main_pt_services_list = Admission.categorical_features(training)
+            columns += list(categorical_df.columns)
             features.append(sparse.csr_matrix(categorical_df.values))
 
         if params['diagnosis_features']:
@@ -797,6 +797,125 @@ class Admission:
 
         X_test = sparse.hstack(features)
         y_test = Admission.get_y(testing)
+
+        columns = np.array(columns)
+
+        # if params['remove_outliers']:
+        #     # if instances were removed, now some variables might have variance == 0. We need to remove those
+        #     # Variables
+        #     constant_variables = []
+        #     for ix in range(X_train.shape[1]):
+        #         constant_variables.append(True if np.var(X_train[:,ix].toarray())==0 else False)
+        #     constant_variables=np.array(constant_variables)
+
+        #     X_train = X_train[:, ~constant_variables]
+        #     X_test = X_test[:, ~constant_variables]
+        #     columns = columns[~constant_variables]
+        
+        # if 'feature_selection' in params and params['feature_selection']:
+        #     clf = SelectKBest(f_classif, k=params['k_best_features'], ).fit(X_train, y_train)
+        #     X_train = clf.transform(X_train)
+        #     X_test = clf.transform(X_test)
+        #     columns = clf.transform(columns.reshape(1,-1))[0,:]
+
+        # ---------- ---------- ---------- ---------- ---------- ---------- ---------- ---------- 
+        # OVER or UNDER SAMPLING (CHANGING NUMBER OF INSTANCES):
+        # ---------- ---------- ---------- ---------- ---------- ---------- ---------- ----------
+        config = configuration.get_config()
+        logging = logger.init_logger(config['all_experiments_log'])
+        SAMPLING_SEED = 1270833263
+        sampling_random_state=np.random.RandomState(SAMPLING_SEED)
+
+        if params['under_sample_majority_class']:
+            assert not params['over_sample_minority_class']
+            assert not params['smote_and_undersampling']
+
+            under_sampler = RandomUnderSampler(sampling_strategy=1, random_state=sampling_random_state)
+            logging.debug('Under Sampling training set before calling fit ....')
+
+            # Under sampling:
+            X_train, y_train = under_sampler.fit_resample(X_train, y_train)
+            logging.debug(f'resampled(X_train).shape = {X_train.shape}')
+            logging.debug(f'resampled(y_train).shape = {y_train.shape}')
+
+        elif params['over_sample_minority_class']:
+            assert not params['under_sample_majority_class']
+            assert not params['smote_and_undersampling']
+
+            over_sample = SMOTE(sampling_strategy=1, random_state=sampling_random_state)
+            logging.debug('Over Sampling training set before calling fit ....')
+
+            X_train, y_train = over_sample.fit_resample(X_train, y_train)
+            logging.debug(f'resampled(X_train).shape = {X_train.shape}')
+            logging.debug(f'resampled(y_train).shape = {y_train.shape}')
+
+        elif params['smote_and_undersampling']:
+            assert not params['under_sample_majority_class']
+            assert not params['over_sample_minority_class']
+
+            over = SMOTE(sampling_strategy=params['over_sampling_ration'], 
+                         random_state=sampling_random_state
+                         )
+            under = RandomUnderSampler(sampling_strategy=params['under_sampling_ration'], 
+                                       random_state=sampling_random_state
+                                       )
+            
+            steps = [('o', over), 
+                     ('u', under)]
+            
+            pipeline = Pipeline(steps=steps)
+            logging.debug('Applying both under and over sampling ....')
+
+            X_train, y_train = pipeline.fit_resample(X_train, y_train)
+            logging.debug(f'resampled(X_train).shape = {X_train.shape}')
+            logging.debug(f'resampled(y_train).shape = {y_train.shape}')
+
+        else:
+            logging.debug('Using X_train, y_train, no samplig strategy ...')
+
+
+
+        # ---------- ---------- ---------- ---------- ---------- ---------- ---------- ----------
+        # REMOVING CONSTANT VARIABLES (CHANGING NUMBER OF COLUMNS, need to update all matrices)
+        # ---------- ---------- ---------- ---------- ---------- ---------- ---------- ----------
+        logging.debug('Looking for constant variables ...')
+        columns = np.array(columns) 
+        if params['under_sample_majority_class'] or params['smote_and_undersampling']:
+            logging.debug('Using time efficient solution')
+            # Time efficient not memory efficient (.toarray to entire matrice)
+            constant_variables = np.var(X_train.toarray(),axis=0)==0
+        else:
+            # Time inefficient but memory efficient (only used when undersampling (less instances))
+            logging.debug('Using memory efficient solution')
+            constant_variables = np.array(list(
+                map(lambda ix: True if np.var(X_train[:,ix].toarray())==0 else False, range(X_train.shape[1]))
+            ))
+
+
+        if np.sum(constant_variables)>0:
+            # X = X[:,~constant_variables]
+            X_train = X_train[:,~constant_variables]
+            X_test = X_test[:,~constant_variables]
+            columns = columns[~constant_variables]
+            logging.debug(f'Removed {np.sum(constant_variables)} columns')
+        else:
+            logging.debug('Not constant variables found ...')
+
+        # ---------- ---------- ---------- ---------- ---------- ---------- ---------- ----------
+        # FEATURE SELECTION (CHANING COLUMNS, NEED TO UDPATE ALL MATRICES)
+        # ---------- ---------- ---------- ---------- ---------- ---------- ---------- ----------
+        logging.debug('Shapes of matrices before FS...')
+        logging.debug(f'X_train: {X_train.shape}')
+        logging.debug(f'y_train: {y_train.shape}')
+        logging.debug(f'X_test:  {X_test.shape}')
+        logging.debug(f'y_test:  {y_test.shape}')
+
+        if 'feature_selection' in params and params['feature_selection']:
+            logging.debug('Applying feature selection')
+            clf = SelectKBest(f_classif, k=params['k_best_features'], ).fit(X_train, y_train)
+            X_train = clf.transform(X_train)
+            X_test = clf.transform(X_test)
+            columns = clf.transform(columns.reshape(1,-1))[0,:]
 
         return X_train, y_train, X_test, y_test, columns
 
