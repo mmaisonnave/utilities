@@ -4,6 +4,8 @@ import datetime
 from typing import Union
 from typing_extensions import Self
 import numpy as np
+import os
+import gensim
 import pandas as pd
 from sklearn.feature_extraction.text import TfidfVectorizer
 from scipy import sparse
@@ -74,7 +76,7 @@ class ReadmissionCode(Enum):
                                   ReadmissionCode.PLANNED_READMIT, 
                                   ReadmissionCode.UNPLANNED_FROM_SDS_0_7)
     
-    def __str__(self: Self) -> str:
+    def __str__(self: Self) -> str:        
         representation = ''
         if self == ReadmissionCode.PLANNED_READMIT:
             representation = 'Planned Readmit'
@@ -431,7 +433,111 @@ class Admission:
             vectorizer = TfidfVectorizer(use_idf=use_idf, vocabulary=vocabulary).fit(codes)
         return vectorizer.get_feature_names_out(), vectorizer.transform(codes)
 
-    # ---------- ---------- ---------- ---------- ---------- ---------- ---------- ---------- 
+    @staticmethod
+    def diagnosis_embeddings(admissions: list[Self], model_name) -> pd.DataFrame:
+        """This methods take a list of admissions (Admission) and creates a dataframe with the diagnosis
+        embeddings generated using Gensim "model_name" model.
+
+        Args:
+            admissions (list[Self]): List of admissions from which take the diagnosis to convert 
+            into embeddings model_name (str, optional): Name of the already trained Gensim embedding 
+            model for diagnoses. 
+
+        Returns:
+            pd.DataFrame: Returns a pandas dataframe with as many rows as elements in the admissions 
+                          list and has many rows as the number of dimensions in the embedding model 
+                          retrieved from disk.
+        """
+        print('Computing diagnosis embeddings ...')
+        config = configuration.get_config()
+        full_model_path = os.path.join(config['gensim_model_folder'], model_name)
+        embedding_full_path = full_model_path+'_embeddings.npy'
+
+        admission2embedding = {}
+        precomputed_found=0
+        if os.path.isfile(embedding_full_path):
+            matrix = np.load(embedding_full_path)
+            # If embedding_size=100, with Y number of admissions the matrix is (101, Y) shaped
+            # The first column is the admit_id, the other 100 dimensions are the embeddings.
+            admission2embedding = {admit_id: matrix[ix,1:] 
+                                   for ix, admit_id in enumerate(matrix[:,0])}
+
+            precomputed_found = len(admission2embedding)
+
+        remaining_to_compute = [admission
+                                for admission in admissions 
+                                if not admission.admit_id in admission2embedding]
+
+        if len(remaining_to_compute)!=0:
+            model = gensim.models.doc2vec.Doc2Vec.load(full_model_path)
+            admission2embedding |= {admission.admit_id: model.infer_vector(admission.diagnosis.codes)
+                                for admission in remaining_to_compute}
+            admit_ids = np.array([admit_id for admit_id in admission2embedding])
+            matrix = np.vstack([admission2embedding[admit_id] for admit_id in admit_ids])
+            to_store = np.hstack([admit_ids.reshape(-1,1),matrix])
+            np.save(embedding_full_path, to_store)
+
+        # Get embedding size from first admission
+        emb_size = admission2embedding[admissions[0].admit_id].shape[0]
+
+        return pd.DataFrame(np.vstack([admission2embedding[admission.admit_id] for admission in admissions]),
+                            columns=[f'emb_{ix}' for ix in range(emb_size)]
+                            )
+
+    @staticmethod
+    def intervention_embeddings(admissions: list[Self], model_name) -> pd.DataFrame:
+        """_summary_
+
+        Args:
+            admissions (list[Self]): _description_
+            model_name (str, optional): _description_.
+
+        Returns:
+            pd.DataFrame: _description_
+        """
+        config = configuration.get_config()
+        full_model_path = os.path.join(config['gensim_model_folder'], model_name)
+        embedding_full_path = full_model_path+'_embeddings.npy'
+
+        admission2embedding = {}
+        precomputed_found=0
+        if os.path.isfile(embedding_full_path):
+            matrix = np.load(embedding_full_path)
+            # If embedding_size=100, with Y number of admissions the matrix is (101, Y) shaped
+            # The first column is the admit_id, the other 100 dimensions are the embeddings.
+            admission2embedding = {admit_id: matrix[ix,1:] 
+                                   for ix, admit_id in enumerate(matrix[:,0])}
+
+            precomputed_found = len(admission2embedding)
+            print(f'Precomputed embeddings found {precomputed_found}')
+
+        remaining_to_compute = [admission
+                                for admission in admissions
+                                if not admission.admit_id in admission2embedding]
+        
+        model = gensim.models.doc2vec.Doc2Vec.load(full_model_path)
+        admission2embedding |= {admission.admit_id: model.infer_vector(admission.intervention_code)
+                             for admission in remaining_to_compute}
+        
+        if precomputed_found==len(admission2embedding):
+            print('No new embeddings were added. ')
+        else:
+            print(f'After adding more embeddings new size= {len(admission2embedding)}')
+            print('Saving new embeddings to disk ...')
+            admit_ids = np.array([admit_id for admit_id in admission2embedding])
+            matrix = np.vstack([admission2embedding[admit_id] for admit_id in admit_ids])
+            to_store = np.hstack([admit_ids.reshape(-1,1),matrix])
+            np.save(embedding_full_path, to_store)
+
+        # Get embedding size from first admission
+        emb_size = admission2embedding[admissions[0].admit_id].shape[0]
+
+        return pd.DataFrame(np.vstack([admission2embedding[admission.admit_id] for admission in admissions]), 
+                            columns=[f'emb_{ix}' for ix in range(emb_size)]
+                            )
+    
+    
+       # ---------- ---------- ---------- ---------- ---------- ---------- ---------- ---------- 
     # CATEGORICAL FEATURES
     # ---------- ---------- ---------- ---------- ---------- ---------- ---------- ---------- 
     @staticmethod
@@ -688,6 +794,8 @@ class Admission:
     # ---------- ---------- ---------- ---------- ---------- ---------- ---------- ---------- 
     @staticmethod
     def get_train_test_matrices(params):
+        config = configuration.get_config()
+        logging = logger.init_logger(config['all_experiments_log'])
         columns = []
         # params = {'fix_missing_in_testing':fix_missing_in_testing,
         #           'numerical_features': numerical_features,
@@ -752,8 +860,25 @@ class Admission:
             features.append(intervention_matrix)
             columns += list(vocab_interventions)
 
+        if 'diagnosis_embeddings' in params and params['diagnosis_embeddings']:
+            logging.debug(f"Loading diagnosis embeddings from model: {params['diag_embedding_model_name']}")
+            diagnosis_embeddings_df = Admission.diagnosis_embeddings(training,
+                                                                     model_name=params['diag_embedding_model_name'],
+                                                                     )
+            logging.debug(f"Embedding loaded, shape={diagnosis_embeddings_df.shape}")
+            features.append(sparse.csr_matrix(diagnosis_embeddings_df.values))
+            columns += list(diagnosis_embeddings_df.columns)
 
-        if params['remove_outliers']:
+        if 'intervention_embeddings' in params and params['intervention_embeddings']:
+            logging.debug(f"Loading intervention embeddings from model: {params['interv_embedding_model_name']}")
+            intervention_embeddings_df = Admission.intervention_embeddings(training,
+                                                                     model_name=params['interv_embedding_model_name'],
+                                                                     )
+            logging.debug(f"Model loaded, shape={intervention_embeddings_df.shape}")
+            features.append(sparse.csr_matrix(intervention_embeddings_df.values))
+            columns += list(intervention_embeddings_df.columns)
+
+        if params['remove_outliers'] and params['numerical_features']:
             mask=~is_outlier
         else:
             mask = np.ones(shape=(len(training)))==1
@@ -795,6 +920,22 @@ class Admission:
                                                                                              )
             features.append(intervention_matrix)
 
+        if 'diagnosis_embeddings' in params and params['diagnosis_embeddings']:
+            logging.debug(f"Loading diagnosis embeddings from model: {params['diag_embedding_model_name']}")
+            diagnosis_embeddings_df = Admission.diagnosis_embeddings(testing,
+                                                                     model_name=params['diag_embedding_model_name'],
+                                                                     )
+            logging.debug(f"Model loaded, shape={diagnosis_embeddings_df.shape}")
+            features.append(sparse.csr_matrix(diagnosis_embeddings_df.values))
+        
+
+        if 'intervention_embeddings' in params and params['intervention_embeddings']:
+            intervention_embeddings_df = Admission.intervention_embeddings(testing,
+                                                                     model_name=params['interv_embedding_model_name'],
+                                                                     )
+            logging.debug(f"Model loaded, shape={intervention_embeddings_df.shape}")
+            features.append(sparse.csr_matrix(intervention_embeddings_df.values))
+
         X_test = sparse.hstack(features)
         y_test = Admission.get_y(testing)
 
@@ -821,8 +962,7 @@ class Admission:
         # ---------- ---------- ---------- ---------- ---------- ---------- ---------- ---------- 
         # OVER or UNDER SAMPLING (CHANGING NUMBER OF INSTANCES):
         # ---------- ---------- ---------- ---------- ---------- ---------- ---------- ----------
-        config = configuration.get_config()
-        logging = logger.init_logger(config['all_experiments_log'])
+
         SAMPLING_SEED = 1270833263
         sampling_random_state=np.random.RandomState(SAMPLING_SEED)
 
