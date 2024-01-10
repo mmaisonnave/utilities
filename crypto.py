@@ -63,10 +63,10 @@ if __name__ == '__main__':
     assert not os.path.isfile(args.output)
 
     if args.action == 'encrypt':
-        encrpypt_file(input_file=args.input)
+        encrpypt_file(input_file=args.input, output_file=args.output)
     else:
         assert args.action == 'decrypt'
-        decrypt_file(input_file=args.input)
+        decrypt_file(input_file=args.input, output_file=args.output)
 
 
 
