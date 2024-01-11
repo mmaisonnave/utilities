@@ -2,6 +2,22 @@ from cryptography.fernet import Fernet
 import argparse
 import os
 
+from utilities import configuration
+
+import os
+class SingletonKey(object):
+    def __new__(cls, key=None):
+        if not hasattr(cls, 'instance'):
+            # Creating new instance with empty Key
+            cls.instance = super(SingletonKey, cls).__new__(cls)
+            cls.key=None
+
+        # No matter if new or existing singleton, if the key!=None then add new key
+        if not key is None:
+            cls.instance.key=key
+            
+        return cls.instance
+
 def encrpypt_file(input_file: str, output_file:str , ) -> None:
     # using the generated key
     fernet = Fernet(input('Enter key for encryption: '))
@@ -19,7 +35,7 @@ def encrpypt_file(input_file: str, output_file:str , ) -> None:
         encrypted_file.write(encrypted)
 
 
-def decrypt_file(input_file: str, output_file:str , key: str) -> None:
+def decrypt_file(input_file: str, output_file:str, ) -> None:
     
     fernet = Fernet(input('Enter key for decryption: '))
 
@@ -35,8 +51,42 @@ def decrypt_file(input_file: str, output_file:str , key: str) -> None:
     with open(output_file, 'wb') as dec_file:
         dec_file.write(decrypted)
 
+def get_content_of_encrypted_file(input_file: str,) -> str:
+    config = configuration.get_config()
+
+    if SingletonKey().key is None:
+        # If we don't have the key we need to get it from a file or from the user...
+        if os.path.isfile(config['keyfile']):
+            # Get key from file.
+            with open(config['keyfile'], 'r') as reader:
+                keyholder = SingletonKey(key=reader.read())
+            os.remove(config['keyfile'])
+        else:
+            # Get key from user if everything else fails
+            keyholder = SingletonKey(key=input('Enter key for decryption: '))
+
+    fernet = Fernet(SingletonKey().key)
+
+    # opening the encrypted file
+    with open(input_file, 'rb') as enc_file:
+        encrypted = enc_file.read()
+    
+    # decrypting the file
+    decrypted = fernet.decrypt(encrypted)
+
+    return decrypted    
+
+
 
 if __name__ == '__main__':
+    """
+    Used to encrypt train and validation JSON data file:
+    python crypto.py 
+        --action=encrypt 
+        --input=/Users/marianomaisonnave/Documents/CBU Postdoc/Grant Data/Merged/2015_2022/train_validation.json 
+        --output=train_validation.json.encryption
+
+    """
     parser = argparse.ArgumentParser(
                         prog='Encrypt/Decrypt',
                         description='What the program does',

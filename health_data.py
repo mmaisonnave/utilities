@@ -19,6 +19,7 @@ from imblearn.under_sampling import RandomUnderSampler
 from imblearn.over_sampling import SMOTE
 from imblearn.pipeline import Pipeline
 
+from utilities import data_manager
 from utilities import logger
 
 # class syntax
@@ -706,15 +707,16 @@ class Admission:
     # GET TRAINING AND TESTING DATA
     # ---------- ---------- ---------- ---------- ---------- ---------- ---------- ---------- 
     @staticmethod
-    def get_training_testing_data(filtering=True)->list[Self]:
+    def get_training_testing_data(filtering=True) -> list[Self]:
         rng = np.random.default_rng(seed=5348363479653547918)
         config = configuration.get_config()
 
         # ---------- ---------- ---------- ---------- 
         # Retriving train testing data from JSON file
         # ---------- ---------- ---------- ---------- 
-        f = open(config['train_val_json'])
-        train_val_data = json.load(f)
+        # f = open(config['train_val_json'])
+        # train_val_data = json.load(f)
+        train_val_data = data_manager.get_train_test_json_content()
 
         # ---------- ---------- ---------- ---------- 
         # Converting JSON to DataClasses

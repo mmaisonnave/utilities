@@ -10,6 +10,7 @@ from sklearn.neural_network import MLPClassifier
 from sklearn.naive_bayes import GaussianNB, ComplementNB, BernoulliNB
 from imblearn.ensemble import BalancedRandomForestClassifier
 import yaml
+import os
 
 def get_config() -> dict:
     """
@@ -17,6 +18,14 @@ def get_config() -> dict:
     """
     with open('../config/paths.yaml', 'r') as file:
         config = yaml.safe_load(file)
+
+    for key, value in config.items():
+        if isinstance(value, list):
+            for ix, elem in enumerate(value):
+                if elem.startswith('$') and elem[1:] in config:
+                    value[ix] = config[elem[1:]]
+            config[key] = os.path.join(*value)
+
     return config
 
 def model_from_configuration(params, random_state):
