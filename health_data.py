@@ -885,6 +885,8 @@ class Admission:
         else:
             mask = np.ones(shape=(len(training)))==1
 
+        for ix, matrix in enumerate(features):
+            print(f'{ix:2} matrix.shape={matrix.shape}')
         X_train = sparse.hstack([matrix[mask,:] for matrix in features])
         y_train = Admission.get_y(training)[mask]
 
