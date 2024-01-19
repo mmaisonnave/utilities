@@ -203,9 +203,9 @@ class Gender(Enum):
 
 @dataclass
 class Diagnosis:
-    codes: str
-    texts: str
-    types: str    
+    codes: list[str]
+    texts: list[str]
+    types: list[str]    
     
     # def __post_init__(self):
     #     if not (len(self.codes)==len(self.texts) and len(self.texts)==len(self.types)):
@@ -214,6 +214,10 @@ class Diagnosis:
     #         print(f'len types: {self.types}')
     #     assert len(self.codes)==len(self.texts) and len(self.texts)==len(self.types)
 
+    def prepend_diagnosis(self, diagnosis) -> None:
+        self.codes = diagnosis.codes + self.codes
+        self.texts = diagnosis.texts + self.texts
+        self.types = diagnosis.types + self.types
 
 class EntryCode(Enum):
     NONE=-1
@@ -707,7 +711,7 @@ class Admission:
     # GET TRAINING AND TESTING DATA
     # ---------- ---------- ---------- ---------- ---------- ---------- ---------- ---------- 
     @staticmethod
-    def get_training_testing_data(filtering=True) -> list[Self]:
+    def get_training_testing_data(filtering=True, combining_diagnoses=False) -> list[Self]:
         rng = np.random.default_rng(seed=5348363479653547918)
         config = configuration.get_config()
 
@@ -788,6 +792,27 @@ class Admission:
 
             # Remove from testing instances without patient code and admit category in {CADAVER, STILLBORN}
             testing = list(filter(lambda admission: admission.is_valid_testing_instance , testing))
+
+        if combining_diagnoses:
+            # Grouping Admission per patient
+            patient2admissions = {}
+            for admission in train+testing:
+                if not admission.code in patient2admissions:
+                    patient2admissions[admission.code]=[]
+                patient2admissions[admission.code].append(admission)
+
+            # Sorting by date
+            for code_ in patient2admissions.keys():
+                patient2admissions[code_] = sorted(patient2admissions[code_], 
+                                                    key=lambda admission: admission.discharge_date)
+            # Combininig diagnosis
+            for patient_code in patient2admissions.keys():
+                patient_admissions = patient2admissions[patient_code]
+                for ix, admission in enumerate(patient_admissions):
+                    previous_admissions = patient_admissions[:ix]
+                    for previous_admission in previous_admissions[::-1]:
+                        admission.diagnosis.prepend_diagnosis(previous_admission.diagnosis)
+
 
         return train, testing
 
