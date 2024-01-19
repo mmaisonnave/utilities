@@ -808,11 +808,9 @@ class Admission:
             # Combininig diagnosis
             for patient_code in patient2admissions.keys():
                 patient_admissions = patient2admissions[patient_code]
-                for ix, admission in enumerate(patient_admissions):
-                    previous_admissions = patient_admissions[:ix]
-                    for previous_admission in previous_admissions[::-1]:
-                        admission.diagnosis.prepend_diagnosis(previous_admission.diagnosis)
-
+                for ix, admission in patient_admissions[1:]:
+                    previous_admission = patient_admissions[ix-1]
+                    admission.diagnosis.prepend_diagnosis(previous_admission.diagnosis)
 
         return train, testing
 
