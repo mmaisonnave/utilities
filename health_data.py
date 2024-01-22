@@ -835,8 +835,9 @@ class Admission:
         #           }
         # ---------- ---------- ---------- ---------- ---------- ---------- ---------- ---------- 
         # RETRIEVING TRAIN AND TEST
-        # ---------- ---------- ---------- ---------- ---------- ---------- ---------- ---------- 
-        training ,testing = Admission.get_training_testing_data()
+        # ---------- ---------- ---------- ---------- ---------- ---------- ---------- ----------
+        combining_diagnoses = True if 'combining_diagnoses' in params and params['combining_diagnoses'] else False 
+        training ,testing = Admission.get_training_testing_data(combining_diagnoses=combining_diagnoses)
         if params['fix_missing_in_testing']:
             for admission in testing:
                 admission.fix_missings(training)
