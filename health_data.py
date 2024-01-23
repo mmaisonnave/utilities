@@ -439,7 +439,9 @@ class Admission:
         return vectorizer.get_feature_names_out(), vectorizer.transform(codes)
 
     @staticmethod
-    def diagnosis_embeddings(admissions: list[Self], model_name) -> pd.DataFrame:
+    def diagnosis_embeddings(admissions: list[Self],
+                             model_name:str,
+                             use_cached:bool =True) -> pd.DataFrame:
         """This methods take a list of admissions (Admission) and creates a dataframe with the diagnosis
         embeddings generated using Gensim "model_name" model.
 
@@ -459,16 +461,18 @@ class Admission:
         embedding_full_path = full_model_path+'_embeddings.npy'
 
         admission2embedding = {}
-        precomputed_found=0
-        if os.path.isfile(embedding_full_path):
+        # precomputed_found = 0
+        if os.path.isfile(embedding_full_path) and not use_cached:
+            print('Precomputed diagnosis model found but NOT BEING USED')
+        if os.path.isfile(embedding_full_path) and use_cached:
             matrix = np.load(embedding_full_path)
             # If embedding_size=100, with Y number of admissions the matrix is (101, Y) shaped
             # The first column is the admit_id, the other 100 dimensions are the embeddings.
             admission2embedding = {admit_id: matrix[ix,1:] 
                                    for ix, admit_id in enumerate(matrix[:,0])}
-
-            precomputed_found = len(admission2embedding)
-
+            # precomputed_found = len(admission2embedding)   
+        else:
+            print('NOT USING CACHED MODEL (DIAGNOSIS)')
         remaining_to_compute = [admission
                                 for admission in admissions 
                                 if not admission.admit_id in admission2embedding]
@@ -480,7 +484,10 @@ class Admission:
             admit_ids = np.array([admit_id for admit_id in admission2embedding])
             matrix = np.vstack([admission2embedding[admit_id] for admit_id in admit_ids])
             to_store = np.hstack([admit_ids.reshape(-1,1),matrix])
-            np.save(embedding_full_path, to_store)
+            if use_cached:
+                np.save(embedding_full_path, to_store)
+            else:
+                print('NOT SAVING, BECAUSE use_cached==False')
 
         # Get embedding size from first admission
         emb_size = admission2embedding[admissions[0].admit_id].shape[0]
@@ -490,7 +497,10 @@ class Admission:
                             )
 
     @staticmethod
-    def intervention_embeddings(admissions: list[Self], model_name) -> pd.DataFrame:
+    def intervention_embeddings(admissions: list[Self], 
+                                model_name:str,
+                                use_cached:bool=True,
+                                ) -> pd.DataFrame:
         """_summary_
 
         Args:
@@ -506,7 +516,10 @@ class Admission:
 
         admission2embedding = {}
         precomputed_found=0
-        if os.path.isfile(embedding_full_path):
+
+        if os.path.isfile(embedding_full_path) and not use_cached:
+            print('Precomputed intervention model found but NOT BEING USED')
+        if os.path.isfile(embedding_full_path) and use_cached:
             matrix = np.load(embedding_full_path)
             # If embedding_size=100, with Y number of admissions the matrix is (101, Y) shaped
             # The first column is the admit_id, the other 100 dimensions are the embeddings.
@@ -515,6 +528,8 @@ class Admission:
 
             precomputed_found = len(admission2embedding)
             print(f'Precomputed embeddings found {precomputed_found}')
+        else:
+            print('NOT USING CACHED MODEL (DIAGNOSIS)')
 
         remaining_to_compute = [admission
                                 for admission in admissions
@@ -532,7 +547,12 @@ class Admission:
             admit_ids = np.array([admit_id for admit_id in admission2embedding])
             matrix = np.vstack([admission2embedding[admit_id] for admit_id in admit_ids])
             to_store = np.hstack([admit_ids.reshape(-1,1),matrix])
-            np.save(embedding_full_path, to_store)
+            if use_cached:
+                # If combined embeddings are used, we don't store the precomputed embeddings
+                np.save(embedding_full_path, to_store)
+            else:
+                print('NOT SAVING, BECAUSE use_cached==False')
+
 
         # Get embedding size from first admission
         emb_size = admission2embedding[admissions[0].admit_id].shape[0]
@@ -711,7 +731,9 @@ class Admission:
     # GET TRAINING AND TESTING DATA
     # ---------- ---------- ---------- ---------- ---------- ---------- ---------- ---------- 
     @staticmethod
-    def get_training_testing_data(filtering=True, combining_diagnoses=False) -> list[Self]:
+    def get_training_testing_data(filtering=True, 
+                                  combining_diagnoses=False, 
+                                  combining_interventions=False) -> list[Self]:
         rng = np.random.default_rng(seed=5348363479653547918)
         config = configuration.get_config()
 
@@ -793,7 +815,7 @@ class Admission:
             # Remove from testing instances without patient code and admit category in {CADAVER, STILLBORN}
             testing = list(filter(lambda admission: admission.is_valid_testing_instance , testing))
 
-        if combining_diagnoses:
+        if combining_diagnoses or combining_interventions:
             # Grouping Admission per patient
             patient2admissions = {}
             for admission in train+testing:
@@ -805,13 +827,23 @@ class Admission:
             for code_ in patient2admissions.keys():
                 patient2admissions[code_] = sorted(patient2admissions[code_], 
                                                     key=lambda admission: admission.discharge_date)
+
+        if combining_diagnoses:
             # Combininig diagnosis
-            for patient_code in patient2admissions.keys():
-                patient_admissions = patient2admissions[patient_code]
+            for patient_code, patient_admissions  in patient2admissions.items():
                 for ix, admission in enumerate(patient_admissions):
                     if ix>0:
                         previous_admission = patient_admissions[ix-1]
                         admission.diagnosis.prepend_diagnosis(previous_admission.diagnosis)
+
+        if combining_interventions:
+            # Combininig interventions
+            for patient_code, patient_admissions  in patient2admissions.items():
+                for ix, admission in enumerate(patient_admissions):
+                    if ix>0:
+                        previous_admission = patient_admissions[ix-1]
+                        admission.intervention_code = previous_admission.intervention_code + admission.intervention_code
+                        admission.px_long_text = previous_admission.px_long_text + admission.px_long_text
 
         return train, testing
 
@@ -837,7 +869,11 @@ class Admission:
         # RETRIEVING TRAIN AND TEST
         # ---------- ---------- ---------- ---------- ---------- ---------- ---------- ----------
         combining_diagnoses = True if 'combining_diagnoses' in params and params['combining_diagnoses'] else False 
-        training ,testing = Admission.get_training_testing_data(combining_diagnoses=combining_diagnoses)
+
+        combining_interventions = True if 'combining_interventions' in params and params['combining_interventions'] else False 
+        logging.debug(f'Calling Admission.get_training_testing_date(combining_diagnoses={combining_diagnoses}, combining_interventions={combining_interventions})')
+        training ,testing = Admission.get_training_testing_data(combining_diagnoses=combining_diagnoses, 
+                                                                combining_interventions=combining_interventions)
         if params['fix_missing_in_testing']:
             for admission in testing:
                 admission.fix_missings(training)
@@ -889,8 +925,11 @@ class Admission:
 
         if 'diagnosis_embeddings' in params and params['diagnosis_embeddings']:
             logging.debug(f"Loading diagnosis embeddings from model: {params['diag_embedding_model_name']}")
+            # If combining diagnosis then cannot use cached (cached embeddings are not combined)
+            use_cached = not combining_diagnoses
             diagnosis_embeddings_df = Admission.diagnosis_embeddings(training,
                                                                      model_name=params['diag_embedding_model_name'],
+                                                                     use_cached=use_cached,
                                                                      )
             logging.debug(f"Embedding loaded, shape={diagnosis_embeddings_df.shape}")
             features.append(sparse.csr_matrix(diagnosis_embeddings_df.values))
@@ -898,8 +937,12 @@ class Admission:
 
         if 'intervention_embeddings' in params and params['intervention_embeddings']:
             logging.debug(f"Loading intervention embeddings from model: {params['interv_embedding_model_name']}")
+            # If combining intervention then cannot use cached (cached embeddings are not combined)
+            use_cached = not combining_interventions
+
             intervention_embeddings_df = Admission.intervention_embeddings(training,
                                                                      model_name=params['interv_embedding_model_name'],
+                                                                     use_cached=use_cached
                                                                      )
             logging.debug(f"Model loaded, shape={intervention_embeddings_df.shape}")
             features.append(sparse.csr_matrix(intervention_embeddings_df.values))
@@ -951,16 +994,22 @@ class Admission:
 
         if 'diagnosis_embeddings' in params and params['diagnosis_embeddings']:
             logging.debug(f"Loading diagnosis embeddings from model: {params['diag_embedding_model_name']}")
+            # If combining diagnosis then cannot use cached (cached embeddings are not combined)
+            use_cached = not combining_diagnoses
             diagnosis_embeddings_df = Admission.diagnosis_embeddings(testing,
                                                                      model_name=params['diag_embedding_model_name'],
+                                                                     use_cached=use_cached,
                                                                      )
             logging.debug(f"Model loaded, shape={diagnosis_embeddings_df.shape}")
             features.append(sparse.csr_matrix(diagnosis_embeddings_df.values))
         
 
         if 'intervention_embeddings' in params and params['intervention_embeddings']:
+            # If combining intervention then cannot use cached (cached embeddings are not combined)
+            use_cached = not combining_interventions
             intervention_embeddings_df = Admission.intervention_embeddings(testing,
                                                                      model_name=params['interv_embedding_model_name'],
+                                                                     use_cached=use_cached,
                                                                      )
             logging.debug(f"Model loaded, shape={intervention_embeddings_df.shape}")
             features.append(sparse.csr_matrix(intervention_embeddings_df.values))
