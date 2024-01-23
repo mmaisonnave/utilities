@@ -931,7 +931,8 @@ class Admission:
                                                                      model_name=params['diag_embedding_model_name'],
                                                                      use_cached=use_cached,
                                                                      )
-            logging.debug(f"Embedding loaded, shape={diagnosis_embeddings_df.shape}")
+            logging.debug(f"Diagnosis model loaded. Shape of diag_emb_df={diagnosis_embeddings_df.shape}")
+
             features.append(sparse.csr_matrix(diagnosis_embeddings_df.values))
             columns += list(diagnosis_embeddings_df.columns)
 
@@ -944,7 +945,7 @@ class Admission:
                                                                      model_name=params['interv_embedding_model_name'],
                                                                      use_cached=use_cached
                                                                      )
-            logging.debug(f"Model loaded, shape={intervention_embeddings_df.shape}")
+            logging.debug(f"Intervention model loaded. Shape of interv_emb_df={intervention_embeddings_df.shape}")
             features.append(sparse.csr_matrix(intervention_embeddings_df.values))
             columns += list(intervention_embeddings_df.columns)
 
