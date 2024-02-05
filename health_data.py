@@ -420,22 +420,30 @@ class Admission:
         return repr_
     
     @staticmethod
-    def diagnosis_codes_features(admissions: list[Self], vocabulary=None, use_idf:bool = False)->(np.ndarray, sparse._csr.csr_matrix):
+    def diagnosis_codes_features(admissions: list[Self], min_df, vocabulary=None, use_idf:bool = False)->(np.ndarray, sparse._csr.csr_matrix):
         codes = [' '.join(admission.diagnosis.codes) for admission in admissions]
         if vocabulary is None:
-            vectorizer = TfidfVectorizer(use_idf=use_idf,).fit(codes)
+            vectorizer = TfidfVectorizer(use_idf=use_idf,
+                                         min_df=min_df,
+                                        ).fit(codes)
         else:
-            vectorizer = TfidfVectorizer(use_idf=use_idf, vocabulary=vocabulary).fit(codes)
+            vectorizer = TfidfVectorizer(use_idf=use_idf, 
+                                         min_df=min_df,
+                                         vocabulary=vocabulary).fit(codes)
 
         return vectorizer.get_feature_names_out(), vectorizer.transform(codes)
     
     @staticmethod
-    def intervention_codes_features(admissions: list[Self], vocabulary=None, use_idf:bool = False)->(np.ndarray, sparse._csr.csr_matrix):
+    def intervention_codes_features(admissions: list[Self], min_df, vocabulary=None, use_idf:bool = False)->(np.ndarray, sparse._csr.csr_matrix):
         codes = [' '.join(admission.intervention_code) for admission in admissions]
         if vocabulary is None:
-            vectorizer = TfidfVectorizer(use_idf=use_idf).fit(codes)
+            vectorizer = TfidfVectorizer(use_idf=use_idf,
+                                         min_df=min_df,
+                                        ).fit(codes)
         else:
-            vectorizer = TfidfVectorizer(use_idf=use_idf, vocabulary=vocabulary).fit(codes)
+            vectorizer = TfidfVectorizer(use_idf=use_idf, 
+                                         min_df=min_df,
+                                         vocabulary=vocabulary).fit(codes)
         return vectorizer.get_feature_names_out(), vectorizer.transform(codes)
 
     @staticmethod
@@ -911,15 +919,21 @@ class Admission:
             features.append(sparse.csr_matrix(categorical_df.values))
 
         if params['diagnosis_features']:
-            vocab_diagnosis, diagnosis_matrix = Admission.diagnosis_codes_features(training, 
-                                                                                            use_idf=params['use_idf'])
+            min_df = params['min_df'] if 'min_df' in params else 1
+            vocab_diagnosis, diagnosis_matrix = Admission.diagnosis_codes_features(training,
+                                                                                   use_idf=params['use_idf'],
+                                                                                   min_df=min_df,
+                                                                                  )
             features.append(diagnosis_matrix)
             columns += list(vocab_diagnosis)
 
 
         if params['intervention_features']:
-            vocab_interventions, intervention_matrix = Admission.intervention_codes_features(training, 
-                                                                                                        use_idf=params['use_idf'])
+            min_df = params['min_df'] if 'min_df' in params else 1
+            vocab_interventions, intervention_matrix = Admission.intervention_codes_features(training,
+                                                                                             min_df=min_df,
+                                                                                             use_idf=params['use_idf'],
+                                                                                            )
             features.append(intervention_matrix)
             columns += list(vocab_interventions)
 
@@ -980,16 +994,21 @@ class Admission:
             categorical_df,_ = Admission.categorical_features(testing, main_pt_services_list=main_pt_services_list)
             features.append(sparse.csr_matrix(categorical_df.values))
 
-        if params['diagnosis_features']:
+        if params['diagnosis_features']:            
+            min_df = params['min_df'] if 'min_df' in params else 1
             vocab_diagnosis, diagnosis_matrix = Admission.diagnosis_codes_features(testing, 
                                                                                    vocabulary=vocab_diagnosis, 
-                                                                                   use_idf=params['use_idf'])
+                                                                                   use_idf=params['use_idf'],
+                                                                                   min_df=min_df,
+                                                                                  )
             features.append(diagnosis_matrix)
 
         if params['intervention_features']:
+            min_df = params['min_df'] if 'min_df' in params else 1
             vocab_interventions, intervention_matrix = Admission.intervention_codes_features(testing, 
                                                                                              vocabulary=vocab_interventions, 
-                                                                                             use_idf=params['use_idf']
+                                                                                             use_idf=params['use_idf'],
+                                                                                             min_df=min_df,
                                                                                              )
             features.append(intervention_matrix)
 

@@ -1,6 +1,7 @@
 from cryptography.fernet import Fernet
 import argparse
 import os
+from getpass import getpass
 
 from utilities import configuration
 
@@ -20,7 +21,7 @@ class SingletonKey(object):
 
 def encrpypt_file(input_file: str, output_file:str , ) -> None:
     # using the generated key
-    fernet = Fernet(input('Enter key for encryption: '))
+    fernet = Fernet(getpass('Enter key for encryption: '))
     
     # opening the original file to encrypt
     with open(input_file, 'rb') as file:
@@ -37,7 +38,7 @@ def encrpypt_file(input_file: str, output_file:str , ) -> None:
 
 def decrypt_file(input_file: str, output_file:str, ) -> None:
     
-    fernet = Fernet(input('Enter key for decryption: '))
+    fernet = Fernet(getpass('Enter key for decryption: '))
 
     # opening the encrypted file
     with open(input_file, 'rb') as enc_file:
@@ -63,7 +64,7 @@ def get_content_of_encrypted_file(input_file: str,) -> str:
             os.remove(config['keyfile'])
         else:
             # Get key from user if everything else fails
-            keyholder = SingletonKey(key=input('Enter key for decryption: '))
+            keyholder = SingletonKey(key=getpass('Enter key for decryption: '))
 
     fernet = Fernet(SingletonKey().key)
 
