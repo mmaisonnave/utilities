@@ -11,6 +11,8 @@ from sklearn.naive_bayes import GaussianNB, ComplementNB, BernoulliNB
 from imblearn.ensemble import BalancedRandomForestClassifier
 import yaml
 import os
+import numpy as np
+import json
 
 def get_config() -> dict:
     """
@@ -27,6 +29,8 @@ def get_config() -> dict:
             config[key] = os.path.join(*value)
 
     return config
+
+
 
 def model_from_configuration(params, random_state):
     if 'class_weight' in params and isinstance(params['class_weight'],dict):
@@ -165,3 +169,13 @@ def model_from_configuration(params, random_state):
                                               max_samples=params['max_samples'],
                                               random_state=random_state,
                                               )
+
+def model_from_configuration_name(configuration_name):
+    MODEL_SEED = 1270833263
+    config = get_config()
+    with open(config['models_config'], encoding='utf-8') as reader:
+        model_configurations = json.load(reader)
+
+    model_dict = model_configurations[configuration_name]
+    model_random_state = np.random.RandomState(MODEL_SEED)
+    return model_from_configuration(model_dict, random_state=model_random_state)
