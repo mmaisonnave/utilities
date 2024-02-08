@@ -14,12 +14,12 @@ def init_logger(logger_path: str):
                     level=logging.DEBUG)
 
     # Send log to stdout in addition to the log file:
-    root = logging.getLogger()
-    root.setLevel(logging.DEBUG)
+    # root = logging.getLogger()
+    # root.setLevel(logging.DEBUG)
 
-    handler = logging.StreamHandler(sys.stdout)
-    handler.setLevel(logging.DEBUG)
-    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-    handler.setFormatter(formatter)
-    root.addHandler(handler)
+    # handler = logging.StreamHandler(sys.stdout)
+    # handler.setLevel(logging.DEBUG)
+    # formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    # handler.setFormatter(formatter)
+    # root.addHandler(handler)
     return logging
