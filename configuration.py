@@ -179,3 +179,8 @@ def model_from_configuration_name(configuration_name):
     model_dict = model_configurations[configuration_name]
     model_random_state = np.random.RandomState(MODEL_SEED)
     return model_from_configuration(model_dict, random_state=model_random_state)
+
+def configuration_from_configuration_name(configuration_name):
+    config = get_config()
+    experiment_configurations = json.load(open(config['experiments_config'], encoding='utf-8'))
+    return experiment_configurations[configuration_name]
