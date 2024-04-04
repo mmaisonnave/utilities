@@ -1212,3 +1212,276 @@ class Admission:
         if self.entry_code  == EntryCode.NONE:
             ix = rng.choice(a=range(len(training)), size=1)[0]
             self.entry_code = training[ix].entry_code
+
+
+
+    # AFTER CV CORRECTIONS
+    @staticmethod
+    def get_all_data(filtering=True,
+                                  combining_diagnoses=False, 
+                                  combining_interventions=False) -> list[Self]:
+        """_summary_
+
+        Args:
+            filtering (bool, optional): _description_. Defaults to True.
+            combining_diagnoses (bool, optional): _description_. Defaults to False.
+            combining_interventions (bool, optional): _description_. Defaults to False.
+
+        Returns:
+            list[Self]: _description_
+        """        
+        rng = np.random.default_rng(seed=5348363479653547918)
+        config = configuration.get_config()
+
+        # ---------- ---------- ---------- ---------- 
+        # Retriving train testing data from JSON file
+        # ---------- ---------- ---------- ---------- 
+        # f = open(config['train_val_json'])
+        # train_val_data = json.load(f)
+        train_val_data = data_manager.get_train_test_json_content()
+
+        # ---------- ---------- ---------- ---------- 
+        # Converting JSON to DataClasses
+        # ---------- ---------- ---------- ---------- 
+        all_admissions = []
+        for ix in train_val_data:
+            all_admissions.append(
+                Admission.from_dict_data(admit_id=int(ix), admission=train_val_data[ix])
+                )
+
+        # ---------- ---------- ---------- ---------- 
+        # Dictionary organizing data by patient
+        # ---------- ---------- ---------- ---------- 
+        patient2admissions = defaultdict(list)
+        for admission in all_admissions:
+            code = admission.code
+            patient2admissions[code].append(admission)
+            
+        # print(set([str(admission.entry_code) for admission in all_admissions]))
+
+        # ---------- ---------- ---------- ----------
+        # Ordering patient list by discharge date (from back )
+        # ---------- ---------- ---------- ----------
+        for patient_code in patient2admissions:
+            admissions_list = patient2admissions[patient_code]
+            admissions_list = sorted(admissions_list, 
+                                     key=lambda admission: admission.discharge_date, 
+                                     reverse=False)
+            assert all([admissions_list[i].discharge_date <= admissions_list[i+1].discharge_date for i in range(len(admissions_list)-1)])
+            patient2admissions[patient_code] = admissions_list
+
+        # print(set([str(admission.entry_code) for admission in all_admissions]))
+
+        patient_count=0
+        valid_readmission_count=0
+        for patient_code in patient2admissions:
+            patient_admissions = patient2admissions[patient_code]
+            ix = 0 
+            while ix < len(patient_admissions):
+                readmission_code = patient_admissions[ix].readmission_code
+                if ReadmissionCode.is_readmit(readmission_code):
+                    # Either is not the first admission (ix>0) or 
+                    # we don't have the patient previous admition (readmission close to begining of dataset) (admit-(2015-01-01))<28 days
+                    # assert ix>0 or (patient_admissions[ix].admit_date - datetime.datetime.fromisoformat('2015-01-01')).days<365
+                    if ix>0 and  patient_admissions[ix-1].is_valid_readmission(patient_admissions[ix]):
+                        patient_admissions[ix-1].add_readmission(patient_admissions[ix])
+                        valid_readmission_count+=1
+                ix+=1
+            patient_count+=1
+
+        # ---------- ---------- ---------- ----------
+        # Filtering instances with missing values
+        # ---------- ---------- ---------- ----------
+        # Remove from training instances with null patient code or with admit category in {CADAVER, STILLBORN}
+        if filtering:
+            all_admissions = list(filter(lambda admission: admission.is_valid_testing_instance, all_admissions))
+
+        if combining_diagnoses or combining_interventions:
+            # Grouping Admission per patient
+            patient2admissions = {}
+            for admission in all_admissions:
+                if not admission.code in patient2admissions:
+                    patient2admissions[admission.code]=[]
+                patient2admissions[admission.code].append(admission)
+
+            # Sorting by date
+            for code_ in patient2admissions.keys():
+                patient2admissions[code_] = sorted(patient2admissions[code_], 
+                                                    key=lambda admission: admission.discharge_date)
+
+        if combining_diagnoses:
+            # Combininig diagnosis
+            for patient_code, patient_admissions  in patient2admissions.items():
+                for ix, admission in enumerate(patient_admissions):
+                    if ix>0:
+                        previous_admission = patient_admissions[ix-1]
+                        admission.diagnosis.prepend_diagnosis(previous_admission.diagnosis)
+
+        if combining_interventions:
+            # Combininig interventions
+            for patient_code, patient_admissions  in patient2admissions.items():
+                for ix, admission in enumerate(patient_admissions):
+                    if ix>0:
+                        previous_admission = patient_admissions[ix-1]
+                        admission.intervention_code = previous_admission.intervention_code + admission.intervention_code
+                        admission.px_long_text = previous_admission.px_long_text + admission.px_long_text
+
+        return all_admissions
+    
+
+
+    ## BOTH MATRICES AFTER CV
+        # ---------- ---------- ---------- ---------- ---------- ---------- ---------- ---------- 
+    # ---------- ---------- ---------- ---------- ---------- ---------- ---------- ---------- 
+    @staticmethod
+    def get_both_matrices(params):
+        config = configuration.get_config()
+        logging = logger.init_logger(config['all_experiments_log'])
+        columns = []
+
+
+        # ---------- ---------- ---------- ---------- ---------- ---------- ---------- ---------- 
+        # RETRIEVING TRAIN AND TEST
+        # ---------- ---------- ---------- ---------- ---------- ---------- ---------- ----------
+        combining_diagnoses = True if 'combining_diagnoses' in params and params['combining_diagnoses'] else False 
+        combining_interventions = True if 'combining_interventions' in params and params['combining_interventions'] else False 
+        
+        logging.debug(f'Calling Admission.get_training_testing_date(combining_diagnoses={combining_diagnoses}, combining_interventions={combining_interventions})')
+        all_admissions = Admission.get_all_data(combining_diagnoses=combining_diagnoses,
+                                                combining_interventions=combining_interventions)
+        
+
+        if params['fix_missing_in_testing']:
+            for admission in all_admissions:
+                admission.fix_missings(all_admissions)
+
+        # ---------- ---------- ---------- ---------- ---------- ---------- ---------- ---------- 
+        # TRAINING MATRIX
+        # ---------- ---------- ---------- ---------- ---------- ---------- ---------- ---------- 
+        features = []
+        if params['numerical_features']:
+            numerical_df = Admission.numerical_features(all_admissions,)
+            columns += list(numerical_df.columns)
+            if params['remove_outliers']:
+                stds = np.std(numerical_df)
+                mean = np.mean(numerical_df, axis=0)
+                is_outlier=np.sum(numerical_df.values > (mean+4*stds).values, axis=1)>0
+            
+            if params['fix_skew']:
+                numerical_df['case_weight'] = np.log10(numerical_df['case_weight']+1)
+                numerical_df['acute_days'] = np.log10(numerical_df['acute_days']+1)
+                numerical_df['alc_days'] = np.log10(numerical_df['alc_days']+1)
+
+            if params['normalize']:
+                scaler = StandardScaler()
+                if params['remove_outliers']:
+                    scaler.fit(numerical_df.values[~is_outlier,:])
+                else:
+                    scaler.fit(numerical_df.values)
+                numerical_df = pd.DataFrame(scaler.transform(numerical_df.values), columns=numerical_df.columns)
+
+            features.append(sparse.csr_matrix(numerical_df.values))
+
+        if params['categorical_features']:
+            categorical_df, main_pt_services_list = Admission.categorical_features(all_admissions)
+            columns += list(categorical_df.columns)
+            features.append(sparse.csr_matrix(categorical_df.values))
+
+        if params['diagnosis_features']:
+            min_df = params['min_df'] if 'min_df' in params else 1
+            vocab_diagnosis, diagnosis_matrix = Admission.diagnosis_codes_features(all_admissions,
+                                                                                   use_idf=params['use_idf'],
+                                                                                   min_df=min_df,
+                                                                                  )
+            features.append(diagnosis_matrix)
+            columns += list(vocab_diagnosis)
+
+
+        if params['intervention_features']:
+            min_df = params['min_df'] if 'min_df' in params else 1
+            vocab_interventions, intervention_matrix = Admission.intervention_codes_features(all_admissions,
+                                                                                             min_df=min_df,
+                                                                                             use_idf=params['use_idf'],
+                                                                                            )
+            features.append(intervention_matrix)
+            columns += list(vocab_interventions)
+
+        if 'diagnosis_embeddings' in params and params['diagnosis_embeddings']:
+            logging.debug(f"Loading diagnosis embeddings from model: {params['diag_embedding_model_name']}")
+            # If combining diagnosis then cannot use cached (cached embeddings are not combined)
+            use_cached = not combining_diagnoses
+            diagnosis_embeddings_df = Admission.diagnosis_embeddings(all_admissions,
+                                                                     model_name=params['diag_embedding_model_name'],
+                                                                     use_cached=use_cached,
+                                                                     )
+            logging.debug(f"Diagnosis model loaded. Shape of diag_emb_df={diagnosis_embeddings_df.shape}")
+
+            features.append(sparse.csr_matrix(diagnosis_embeddings_df.values))
+            columns += list(diagnosis_embeddings_df.columns)
+
+        if 'intervention_embeddings' in params and params['intervention_embeddings']:
+            logging.debug(f"Loading intervention embeddings from model: {params['interv_embedding_model_name']}")
+            # If combining intervention then cannot use cached (cached embeddings are not combined)
+            use_cached = not combining_interventions
+
+            intervention_embeddings_df = Admission.intervention_embeddings(all_admissions,
+                                                                     model_name=params['interv_embedding_model_name'],
+                                                                     use_cached=use_cached
+                                                                     )
+            logging.debug(f"Intervention model loaded. Shape of interv_emb_df={intervention_embeddings_df.shape}")
+            features.append(sparse.csr_matrix(intervention_embeddings_df.values))
+            columns += list(intervention_embeddings_df.columns)
+
+        if params['remove_outliers'] and params['numerical_features']:
+            mask=~is_outlier
+        else:
+            mask = np.ones(shape=(len(all_admissions)))==1
+
+        for ix, matrix in enumerate(features):
+            print(f'{ix:2} matrix.shape={matrix.shape}')
+        X = sparse.hstack([matrix[mask,:] for matrix in features])
+        y = Admission.get_y(all_admissions)[mask]
+
+
+        columns = np.array(columns)
+
+
+
+
+        # ---------- ---------- ---------- ---------- ---------- ---------- ---------- ----------
+        # REMOVING CONSTANT VARIABLES (CHANGING NUMBER OF COLUMNS, need to update all matrices)
+        # ---------- ---------- ---------- ---------- ---------- ---------- ---------- ----------
+        logging.debug('Looking for constant variables ...')
+        columns = np.array(columns) 
+
+
+        logging.debug('Using memory efficient solution')
+        constant_variables = np.array(list(
+            map(lambda ix: True if np.var(X[:,ix].toarray())==0 else False, range(X.shape[1]))
+        ))
+
+
+        if np.sum(constant_variables)>0:
+            # X = X[:,~constant_variables]
+            X = X[:,~constant_variables]
+            columns = columns[~constant_variables]
+            logging.debug(f'Removed {np.sum(constant_variables)} columns')
+        else:
+            logging.debug('Not constant variables found ...')
+
+        # ---------- ---------- ---------- ---------- ---------- ---------- ---------- ----------
+        # FEATURE SELECTION (CHANING COLUMNS, NEED TO UDPATE ALL MATRICES)
+        # ---------- ---------- ---------- ---------- ---------- ---------- ---------- ----------
+        logging.debug('Shapes of matrices before FS...')
+        logging.debug(f'X: {X.shape}')
+        logging.debug(f'y: {y.shape}')
+
+
+        # if 'feature_selection' in params and params['feature_selection']:
+        #     logging.debug('Applying feature selection')
+        #     clf = SelectKBest(f_classif, k=params['k_best_features'], ).fit(X_train, y_train)
+        #     X_train = clf.transform(X_train)
+        #     X_test = clf.transform(X_test)
+        #     columns = clf.transform(columns.reshape(1,-1))[0,:]
+
+        return X, y, columns
