@@ -674,6 +674,8 @@ class Admission:
 
         # Missing from training are removed, missing from testing are fixed. 
         # Should not be na values.
+
+
         assert df.dropna().shape[0]==df.shape[0]
 
         return df
@@ -1169,15 +1171,15 @@ class Admission:
         assert not self.code is None, 'Cannot fix an entry without code (cannot recover target variable without it).'
 
         if self.admit_date is None:
-            avg_los = np.average([admission.length_of_stay for admission in training])
-            std_los = np.std([admission.length_of_stay for admission in training])
+            avg_los = np.average([admission.length_of_stay for admission in training if not admission.length_of_stay is None])
+            std_los = np.std([admission.length_of_stay for admission in training if not admission.length_of_stay is None])
             los = int(rng.normal(loc=avg_los, scale=std_los, size=1)[0])
 
             self.admit_date = self.discharge_date - datetime.timedelta(days=los)
 
         if self.case_weight is None or np.isnan(self.case_weight):
-            avg_case_weight =  np.average([admission.case_weight for admission in training])
-            std_case_weight =  np.std([admission.case_weight for admission in training])
+            avg_case_weight =  np.average([admission.case_weight for admission in training if not admission.case_weight is None and not np.isnan(admission.case_weight)])
+            std_case_weight =  np.std([admission.case_weight for admission in training if not admission.case_weight is None and not np.isnan(admission.case_weight)])
 
             self.case_weight = rng.normal(loc=avg_case_weight, scale=std_case_weight, size=1)[0]
 
@@ -1198,8 +1200,8 @@ class Admission:
             self.transfusion_given = training[ix].transfusion_given
 
         if self.cmg is None or np.isnan(self.cmg):
-            new_cmb = rng.uniform(low=min([admission.cmg for admission in training]), 
-                                high=max([admission.cmg for admission in training]), 
+            new_cmb = rng.uniform(low=min([admission.cmg for admission in training if not admission.cmg is None]), 
+                                high=max([admission.cmg for admission in training if not admission.cmg is None]), 
                                 size=1)[0]
             self.cmg = new_cmb
 
