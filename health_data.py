@@ -865,16 +865,6 @@ class Admission:
         config = configuration.get_config()
         logging = logger.init_logger(config['all_experiments_log'])
         columns = []
-        # params = {'fix_missing_in_testing':fix_missing_in_testing,
-        #           'numerical_features': numerical_features,
-        #           'remove_outliers':remove_outliers,
-        #           'fix_skew': fix_skew,
-        #           'normalize': normalize,
-        #           'categorical_features': categorical_features,
-        #           'diagnosis_features': diagnosis_features,
-        #           'intervention_features': intervention_features,
-        #           'use_idf': use_idf,
-        #           }
         # ---------- ---------- ---------- ---------- ---------- ---------- ---------- ---------- 
         # RETRIEVING TRAIN AND TEST
         # ---------- ---------- ---------- ---------- ---------- ---------- ---------- ----------
@@ -1063,55 +1053,55 @@ class Admission:
         # OVER or UNDER SAMPLING (CHANGING NUMBER OF INSTANCES):
         # ---------- ---------- ---------- ---------- ---------- ---------- ---------- ----------
 
-        # SAMPLING_SEED = 1270833263
-        # sampling_random_state=np.random.RandomState(SAMPLING_SEED)
+        SAMPLING_SEED = 1270833263
+        sampling_random_state = np.random.RandomState(SAMPLING_SEED)
 
-        # if params['under_sample_majority_class']:
-        #     assert not params['over_sample_minority_class']
-        #     assert not params['smote_and_undersampling']
+        if params['under_sample_majority_class']:
+            assert not params['over_sample_minority_class']
+            assert not params['smote_and_undersampling']
 
-        #     under_sampler = RandomUnderSampler(sampling_strategy=1, random_state=sampling_random_state)
-        #     logging.debug('Under Sampling training set before calling fit ....')
+            under_sampler = RandomUnderSampler(sampling_strategy=1, random_state=sampling_random_state)
+            logging.debug('Under Sampling training set before calling fit ....')
 
-        #     # Under sampling:
-        #     X_train, y_train = under_sampler.fit_resample(X_train, y_train)
-        #     logging.debug(f'resampled(X_train).shape = {X_train.shape}')
-        #     logging.debug(f'resampled(y_train).shape = {y_train.shape}')
+            # Under sampling:
+            X_train, y_train = under_sampler.fit_resample(X_train, y_train)
+            logging.debug(f'resampled(X_train).shape = {X_train.shape}')
+            logging.debug(f'resampled(y_train).shape = {y_train.shape}')
 
-        # elif params['over_sample_minority_class']:
-        #     assert not params['under_sample_majority_class']
-        #     assert not params['smote_and_undersampling']
+        elif params['over_sample_minority_class']:
+            assert not params['under_sample_majority_class']
+            assert not params['smote_and_undersampling']
 
-        #     over_sample = SMOTE(sampling_strategy=1, random_state=sampling_random_state)
-        #     logging.debug('Over Sampling training set before calling fit ....')
+            over_sample = SMOTE(sampling_strategy=1, random_state=sampling_random_state)
+            logging.debug('Over Sampling training set before calling fit ....')
 
-        #     X_train, y_train = over_sample.fit_resample(X_train, y_train)
-        #     logging.debug(f'resampled(X_train).shape = {X_train.shape}')
-        #     logging.debug(f'resampled(y_train).shape = {y_train.shape}')
+            X_train, y_train = over_sample.fit_resample(X_train, y_train)
+            logging.debug(f'resampled(X_train).shape = {X_train.shape}')
+            logging.debug(f'resampled(y_train).shape = {y_train.shape}')
 
-        # elif params['smote_and_undersampling']:
-        #     assert not params['under_sample_majority_class']
-        #     assert not params['over_sample_minority_class']
+        elif params['smote_and_undersampling']:
+            assert not params['under_sample_majority_class']
+            assert not params['over_sample_minority_class']
 
-        #     over = SMOTE(sampling_strategy=params['over_sampling_ration'], 
-        #                  random_state=sampling_random_state
-        #                  )
-        #     under = RandomUnderSampler(sampling_strategy=params['under_sampling_ration'], 
-        #                                random_state=sampling_random_state
-        #                                )
+            over = SMOTE(sampling_strategy=params['over_sampling_ration'], 
+                         random_state=sampling_random_state
+                         )
+            under = RandomUnderSampler(sampling_strategy=params['under_sampling_ration'], 
+                                       random_state=sampling_random_state
+                                       )
             
-        #     steps = [('o', over), 
-        #              ('u', under)]
+            steps = [('o', over), 
+                     ('u', under)]
             
-        #     pipeline = Pipeline(steps=steps)
-        #     logging.debug('Applying both under and over sampling ....')
+            pipeline = Pipeline(steps=steps)
+            logging.debug('Applying both under and over sampling ....')
 
-        #     X_train, y_train = pipeline.fit_resample(X_train, y_train)
-        #     logging.debug(f'resampled(X_train).shape = {X_train.shape}')
-        #     logging.debug(f'resampled(y_train).shape = {y_train.shape}')
+            X_train, y_train = pipeline.fit_resample(X_train, y_train)
+            logging.debug(f'resampled(X_train).shape = {X_train.shape}')
+            logging.debug(f'resampled(y_train).shape = {y_train.shape}')
 
-        # else:
-        #     logging.debug('Using X_train, y_train, no samplig strategy ...')
+        else:
+            logging.debug('Using X_train, y_train, no samplig strategy ...')
 
 
 
@@ -1214,8 +1204,6 @@ class Admission:
         if self.entry_code  == EntryCode.NONE:
             ix = rng.choice(a=range(len(training)), size=1)[0]
             self.entry_code = training[ix].entry_code
-
-
 
     # AFTER CV CORRECTIONS
     @staticmethod
@@ -1333,7 +1321,7 @@ class Admission:
 
 
     ## BOTH MATRICES AFTER CV
-        # ---------- ---------- ---------- ---------- ---------- ---------- ---------- ---------- 
+    # ---------- ---------- ---------- ---------- ---------- ---------- ---------- ---------- 
     # ---------- ---------- ---------- ---------- ---------- ---------- ---------- ---------- 
     @staticmethod
     def get_both_matrices(params):
