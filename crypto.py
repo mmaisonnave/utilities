@@ -3,9 +3,7 @@ import argparse
 import os
 from getpass import getpass
 
-import sys
-sys.path.append('.')
-from utilities import configuration
+import configuration
 
 import os
 class SingletonKey(object):
