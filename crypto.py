@@ -3,6 +3,8 @@ import argparse
 import os
 from getpass import getpass
 
+import sys
+sys.path.append('.')
 from utilities import configuration
 
 import os
@@ -61,7 +63,7 @@ def get_content_of_encrypted_file(input_file: str,) -> str:
             # Get key from file.
             with open(config['keyfile'], 'r') as reader:
                 keyholder = SingletonKey(key=reader.read())
-            os.remove(config['keyfile'])
+            # os.remove(config['keyfile'])
         else:
             # Get key from user if everything else fails
             keyholder = SingletonKey(key=getpass('Enter key for decryption: '))
@@ -83,10 +85,9 @@ if __name__ == '__main__':
     """
     Used to encrypt train and validation JSON data file:
     python crypto.py 
-        --action=encrypt 
-        --input=/Users/marianomaisonnave/Documents/CBU Postdoc/Grant Data/Merged/2015_2022/train_validation.json 
-        --output=train_validation.json.encryption
-
+     --action=encrypt 
+     --input=/Users/marianomaisonnave/Documents/CBU Postdoc/Grant Data/Merged/2015_2022/train_validation.json 
+     --output=train_validation.json.encryption
     """
     parser = argparse.ArgumentParser(
                         prog='Encrypt/Decrypt',
