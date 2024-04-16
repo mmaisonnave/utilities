@@ -3,7 +3,10 @@ import argparse
 import os
 from getpass import getpass
 
-import configuration
+if os.getcwd() == 'utilities':
+    import configuration
+else:
+    from utilities import configuration
 
 import os
 class SingletonKey(object):

@@ -1207,7 +1207,7 @@ class Admission:
 
     # AFTER CV CORRECTIONS
     @staticmethod
-    def get_all_data(filtering=True,
+    def get_train_test_data(filtering=True,
                                   combining_diagnoses=False, 
                                   combining_interventions=False) -> list[Self]:
         """_summary_
@@ -1318,13 +1318,123 @@ class Admission:
 
         return all_admissions
     
+    @staticmethod
+    def get_heldout_data(filtering=True,
+                         combining_diagnoses=False, 
+                         combining_interventions=False) -> list[Self]:
+        """_summary_
 
+        Args:
+            filtering (bool, optional): _description_. Defaults to True.
+            combining_diagnoses (bool, optional): _description_. Defaults to False.
+            combining_interventions (bool, optional): _description_. Defaults to False.
+
+        Returns:
+            list[Self]: _description_
+        """        
+        rng = np.random.default_rng(seed=5348363479653547918)
+        config = configuration.get_config()
+
+        # ---------- ---------- ---------- ---------- 
+        # Retriving train testing data from JSON file
+        # ---------- ---------- ---------- ---------- 
+        # f = open(config['train_val_json'])
+        # train_val_data = json.load(f)
+        train_val_data = data_manager.get_train_test_json_content()
+
+        # ---------- ---------- ---------- ---------- 
+        # Converting JSON to DataClasses
+        # ---------- ---------- ---------- ---------- 
+        all_admissions = []
+        for ix in train_val_data:
+            all_admissions.append(
+                Admission.from_dict_data(admit_id=int(ix), admission=train_val_data[ix])
+                )
+
+        # ---------- ---------- ---------- ---------- 
+        # Dictionary organizing data by patient
+        # ---------- ---------- ---------- ---------- 
+        patient2admissions = defaultdict(list)
+        for admission in all_admissions:
+            code = admission.code
+            patient2admissions[code].append(admission)
+            
+        # print(set([str(admission.entry_code) for admission in all_admissions]))
+
+        # ---------- ---------- ---------- ----------
+        # Ordering patient list by discharge date (from back )
+        # ---------- ---------- ---------- ----------
+        for patient_code in patient2admissions:
+            admissions_list = patient2admissions[patient_code]
+            admissions_list = sorted(admissions_list, 
+                                     key=lambda admission: admission.discharge_date, 
+                                     reverse=False)
+            assert all([admissions_list[i].discharge_date <= admissions_list[i+1].discharge_date for i in range(len(admissions_list)-1)])
+            patient2admissions[patient_code] = admissions_list
+
+        # print(set([str(admission.entry_code) for admission in all_admissions]))
+
+        patient_count=0
+        valid_readmission_count=0
+        for patient_code in patient2admissions:
+            patient_admissions = patient2admissions[patient_code]
+            ix = 0 
+            while ix < len(patient_admissions):
+                readmission_code = patient_admissions[ix].readmission_code
+                if ReadmissionCode.is_readmit(readmission_code):
+                    # Either is not the first admission (ix>0) or 
+                    # we don't have the patient previous admition (readmission close to begining of dataset) (admit-(2015-01-01))<28 days
+                    # assert ix>0 or (patient_admissions[ix].admit_date - datetime.datetime.fromisoformat('2015-01-01')).days<365
+                    if ix>0 and  patient_admissions[ix-1].is_valid_readmission(patient_admissions[ix]):
+                        patient_admissions[ix-1].add_readmission(patient_admissions[ix])
+                        valid_readmission_count+=1
+                ix+=1
+            patient_count+=1
+
+        # ---------- ---------- ---------- ----------
+        # Filtering instances with missing values
+        # ---------- ---------- ---------- ----------
+        # Remove from training instances with null patient code or with admit category in {CADAVER, STILLBORN}
+        if filtering:
+            all_admissions = list(filter(lambda admission: admission.is_valid_testing_instance, all_admissions))
+
+        if combining_diagnoses or combining_interventions:
+            # Grouping Admission per patient
+            patient2admissions = {}
+            for admission in all_admissions:
+                if not admission.code in patient2admissions:
+                    patient2admissions[admission.code]=[]
+                patient2admissions[admission.code].append(admission)
+
+            # Sorting by date
+            for code_ in patient2admissions.keys():
+                patient2admissions[code_] = sorted(patient2admissions[code_], 
+                                                    key=lambda admission: admission.discharge_date)
+
+        if combining_diagnoses:
+            # Combininig diagnosis
+            for patient_code, patient_admissions  in patient2admissions.items():
+                for ix, admission in enumerate(patient_admissions):
+                    if ix>0:
+                        previous_admission = patient_admissions[ix-1]
+                        admission.diagnosis.prepend_diagnosis(previous_admission.diagnosis)
+
+        if combining_interventions:
+            # Combininig interventions
+            for patient_code, patient_admissions  in patient2admissions.items():
+                for ix, admission in enumerate(patient_admissions):
+                    if ix>0:
+                        previous_admission = patient_admissions[ix-1]
+                        admission.intervention_code = previous_admission.intervention_code + admission.intervention_code
+                        admission.px_long_text = previous_admission.px_long_text + admission.px_long_text
+
+        return all_admissions
 
     ## BOTH MATRICES AFTER CV
     # ---------- ---------- ---------- ---------- ---------- ---------- ---------- ---------- 
     # ---------- ---------- ---------- ---------- ---------- ---------- ---------- ---------- 
     @staticmethod
-    def get_both_matrices(params):
+    def get_both_train_test_matrices(params):
         config = configuration.get_config()
         logging = logger.init_logger(config['all_experiments_log'])
         columns = []
@@ -1337,7 +1447,7 @@ class Admission:
         combining_interventions = True if 'combining_interventions' in params and params['combining_interventions'] else False 
         
         logging.debug(f'Calling Admission.get_training_testing_date(combining_diagnoses={combining_diagnoses}, combining_interventions={combining_interventions})')
-        all_admissions = Admission.get_all_data(combining_diagnoses=combining_diagnoses,
+        all_admissions = Admission.get_train_test_data(combining_diagnoses=combining_diagnoses,
                                                 combining_interventions=combining_interventions)
         
 
