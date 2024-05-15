@@ -425,10 +425,14 @@ class Admission:
         if vocabulary is None:
             vectorizer = TfidfVectorizer(use_idf=use_idf,
                                          min_df=min_df,
+                                         binary=True,
+                                         norm=None,
                                         ).fit(codes)
         else:
             vectorizer = TfidfVectorizer(use_idf=use_idf, 
                                          min_df=min_df,
+                                         binary=True,
+                                         norm=None,
                                          vocabulary=vocabulary).fit(codes)
 
         return vectorizer.get_feature_names_out(), vectorizer.transform(codes)
@@ -439,10 +443,14 @@ class Admission:
         if vocabulary is None:
             vectorizer = TfidfVectorizer(use_idf=use_idf,
                                          min_df=min_df,
+                                         binary=True,
+                                         norm=None,
                                         ).fit(codes)
         else:
             vectorizer = TfidfVectorizer(use_idf=use_idf, 
                                          min_df=min_df,
+                                         binary=True,
+                                         norm=None,
                                          vocabulary=vocabulary).fit(codes)
         return vectorizer.get_feature_names_out(), vectorizer.transform(codes)
 
