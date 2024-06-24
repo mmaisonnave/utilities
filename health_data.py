@@ -606,6 +606,8 @@ class Admission:
         if main_pt_services_list is None:
             main_pt_services_list = list(set([admission.main_pt_service for admission in admissions]))
 
+        main_pt_services_list = sorted(main_pt_services_list)
+
         service2idx = dict([(service,ix+len(columns)) for ix,service in enumerate(main_pt_services_list)])
         columns = columns + main_pt_services_list
 
@@ -654,7 +656,7 @@ class Admission:
                 vector[service2idx[admission.main_pt_service]]=1
             vectors.append(vector)
 
-        return pd.DataFrame(vectors, columns=columns),main_pt_services_list
+        return pd.DataFrame(vectors, columns=columns), main_pt_services_list
 
     @property
     def is_valid_training_instance(self:Self)->bool:
@@ -682,8 +684,6 @@ class Admission:
 
         # Missing from training are removed, missing from testing are fixed. 
         # Should not be na values.
-
-
         assert df.dropna().shape[0]==df.shape[0]
 
         return df
@@ -1348,15 +1348,15 @@ class Admission:
         # ---------- ---------- ---------- ---------- 
         # f = open(config['train_val_json'])
         # train_val_data = json.load(f)
-        train_val_data = data_manager.get_train_test_json_content()
+        heldout_data = data_manager.get_heldout_json_content()
 
         # ---------- ---------- ---------- ---------- 
         # Converting JSON to DataClasses
         # ---------- ---------- ---------- ---------- 
         all_admissions = []
-        for ix in train_val_data:
+        for ix in heldout_data:
             all_admissions.append(
-                Admission.from_dict_data(admit_id=int(ix), admission=train_val_data[ix])
+                Admission.from_dict_data(admit_id=int(ix), admission=heldout_data[ix])
                 )
 
         # ---------- ---------- ---------- ---------- 
@@ -1593,3 +1593,474 @@ class Admission:
         #     columns = clf.transform(columns.reshape(1,-1))[0,:]
 
         return X, y, columns
+    
+
+
+
+
+    @staticmethod
+    def get_development_and_held_out_matrices(params):
+        config = configuration.get_config()
+        columns = []
+        # ---------- ---------- ---------- ---------- ---------- ---------- ---------- ---------- 
+        # RETRIEVING TRAIN AND TEST
+        # ---------- ---------- ---------- ---------- ---------- ---------- ---------- ----------
+        combining_diagnoses = True if 'combining_diagnoses' in params and params['combining_diagnoses'] else False 
+
+        combining_interventions = True if 'combining_interventions' in params and params['combining_interventions'] else False 
+        print(f'Calling Admission.get_development_and_held_out_matrices(combining_diagnoses={combining_diagnoses}, combining_interventions={combining_interventions})')
+        
+        
+        training, testing = Admission.get_training_testing_data(combining_diagnoses=combining_diagnoses, 
+                                                                combining_interventions=combining_interventions)
+        
+
+
+
+        development = training+testing
+
+        development = list(filter(lambda admission: admission.is_valid_training_instance, development))
+
+
+
+        heldout = Admission.get_heldout_data(combining_diagnoses=combining_diagnoses, 
+                                             combining_interventions=combining_interventions)
+        
+        
+        if params['fix_missing_in_testing']:
+            for admission in heldout:
+                admission.fix_missings(development)
+
+        # ---------- ---------- ---------- ---------- ---------- ---------- ---------- ---------- 
+        # TRAINING MATRIX
+        # ---------- ---------- ---------- ---------- ---------- ---------- ---------- ---------- 
+        features = []
+        if params['numerical_features']:
+            numerical_df = Admission.numerical_features(development,)
+            columns += list(numerical_df.columns)
+            if params['remove_outliers']:
+                stds = np.std(numerical_df)
+                mean = np.mean(numerical_df, axis=0)
+                is_outlier=np.sum(numerical_df.values > (mean+4*stds).values, axis=1)>0
+            
+            if params['fix_skew']:
+                numerical_df['case_weight'] = np.log10(numerical_df['case_weight']+1)
+                numerical_df['acute_days'] = np.log10(numerical_df['acute_days']+1)
+                numerical_df['alc_days'] = np.log10(numerical_df['alc_days']+1)
+
+            if params['normalize']:
+                scaler = StandardScaler()
+                if params['remove_outliers']:
+                    scaler.fit(numerical_df.values[~is_outlier,:])
+                else:
+                    scaler.fit(numerical_df.values)
+                numerical_df = pd.DataFrame(scaler.transform(numerical_df.values), columns=numerical_df.columns)
+
+            features.append(sparse.csr_matrix(numerical_df.values))
+
+        if params['categorical_features']:
+            categorical_df, main_pt_services_list = Admission.categorical_features(development)
+            columns += list(categorical_df.columns)
+            features.append(sparse.csr_matrix(categorical_df.values))
+
+        if params['diagnosis_features']:
+            min_df = params['min_df'] if 'min_df' in params else 1
+            vocab_diagnosis, diagnosis_matrix = Admission.diagnosis_codes_features(development,
+                                                                                   use_idf=params['use_idf'],
+                                                                                   min_df=min_df,
+                                                                                  )
+            features.append(diagnosis_matrix)
+            columns += list(vocab_diagnosis)
+
+
+        if params['intervention_features']:
+            min_df = params['min_df'] if 'min_df' in params else 1
+            vocab_interventions, intervention_matrix = Admission.intervention_codes_features(development,
+                                                                                             min_df=min_df,
+                                                                                             use_idf=params['use_idf'],
+                                                                                            )
+            features.append(intervention_matrix)
+            columns += list(vocab_interventions)
+
+        if 'diagnosis_embeddings' in params and params['diagnosis_embeddings']:
+            print(f"Loading diagnosis embeddings from model: {params['diag_embedding_model_name']}")
+            # If combining diagnosis then cannot use cached (cached embeddings are not combined)
+            use_cached = not combining_diagnoses
+            diagnosis_embeddings_df = Admission.diagnosis_embeddings(development,
+                                                                     model_name=params['diag_embedding_model_name'],
+                                                                     use_cached=use_cached,
+                                                                     )
+            print(f"Diagnosis model loaded. Shape of diag_emb_df={diagnosis_embeddings_df.shape}")
+
+            features.append(sparse.csr_matrix(diagnosis_embeddings_df.values))
+            columns += list(diagnosis_embeddings_df.columns)
+
+        if 'intervention_embeddings' in params and params['intervention_embeddings']:
+            print(f"Loading intervention embeddings from model: {params['interv_embedding_model_name']}")
+            # If combining intervention then cannot use cached (cached embeddings are not combined)
+            use_cached = not combining_interventions
+
+            intervention_embeddings_df = Admission.intervention_embeddings(development,
+                                                                     model_name=params['interv_embedding_model_name'],
+                                                                     use_cached=use_cached
+                                                                     )
+            print(f"Intervention model loaded. Shape of interv_emb_df={intervention_embeddings_df.shape}")
+            features.append(sparse.csr_matrix(intervention_embeddings_df.values))
+            columns += list(intervention_embeddings_df.columns)
+
+        if params['remove_outliers'] and params['numerical_features']:
+            mask=~is_outlier
+        else:
+            mask = np.ones(shape=(len(development)))==1
+
+        for ix, matrix in enumerate(features):
+            print(f'{ix:2} matrix.shape={matrix.shape}')
+        X_development = sparse.hstack([matrix[mask,:] for matrix in features])
+        y_development = Admission.get_y(development)[mask]
+
+
+        # ---------- ---------- ---------- ---------- ---------- ---------- ---------- ---------- 
+        # TESTING MATRIX
+        # ---------- ---------- ---------- ---------- ---------- ---------- ---------- ---------- 
+        features = []
+        if params['numerical_features']:
+            numerical_df = Admission.numerical_features(heldout,)
+            
+            if params['fix_skew']:
+                numerical_df['case_weight'] = np.log10(numerical_df['case_weight']+1)
+                numerical_df['acute_days'] = np.log10(numerical_df['acute_days']+1)
+                numerical_df['alc_days'] = np.log10(numerical_df['alc_days']+1)
+
+            if params['normalize']:
+                numerical_df = pd.DataFrame(scaler.transform(numerical_df.values), columns=numerical_df.columns)
+            features.append(sparse.csr_matrix(numerical_df.values))
+
+        if params['categorical_features']:
+            categorical_df,_ = Admission.categorical_features(heldout, 
+                                                              main_pt_services_list=main_pt_services_list)
+            features.append(sparse.csr_matrix(categorical_df.values))
+
+        if params['diagnosis_features']:            
+            min_df = params['min_df'] if 'min_df' in params else 1
+            vocab_diagnosis, diagnosis_matrix = Admission.diagnosis_codes_features(heldout, 
+                                                                                   vocabulary=vocab_diagnosis, 
+                                                                                   use_idf=params['use_idf'],
+                                                                                   min_df=min_df,
+                                                                                  )
+            features.append(diagnosis_matrix)
+
+        if params['intervention_features']:
+            min_df = params['min_df'] if 'min_df' in params else 1
+            vocab_interventions, intervention_matrix = Admission.intervention_codes_features(heldout, 
+                                                                                             vocabulary=vocab_interventions, 
+                                                                                             use_idf=params['use_idf'],
+                                                                                             min_df=min_df,
+                                                                                             )
+            features.append(intervention_matrix)
+
+        if 'diagnosis_embeddings' in params and params['diagnosis_embeddings']:
+            print(f"Loading diagnosis embeddings from model: {params['diag_embedding_model_name']}")
+            # If combining diagnosis then cannot use cached (cached embeddings are not combined)
+            use_cached = not combining_diagnoses
+            diagnosis_embeddings_df = Admission.diagnosis_embeddings(heldout,
+                                                                     model_name=params['diag_embedding_model_name'],
+                                                                     use_cached=use_cached,
+                                                                     )
+            print(f"Model loaded, shape={diagnosis_embeddings_df.shape}")
+            features.append(sparse.csr_matrix(diagnosis_embeddings_df.values))
+        
+
+        if 'intervention_embeddings' in params and params['intervention_embeddings']:
+            # If combining intervention then cannot use cached (cached embeddings are not combined)
+            use_cached = not combining_interventions
+            intervention_embeddings_df = Admission.intervention_embeddings(heldout,
+                                                                     model_name=params['interv_embedding_model_name'],
+                                                                     use_cached=use_cached,
+                                                                     )
+            print(f"Model loaded, shape={intervention_embeddings_df.shape}")
+            features.append(sparse.csr_matrix(intervention_embeddings_df.values))
+
+        X_heldout = sparse.hstack(features)
+        y_heldout = Admission.get_y(heldout)
+
+        columns = np.array(columns)
+
+        # if params['remove_outliers']:
+        #     # if instances were removed, now some variables might have variance == 0. We need to remove those
+        #     # Variables
+        #     constant_variables = []
+        #     for ix in range(X_train.shape[1]):
+        #         constant_variables.append(True if np.var(X_train[:,ix].toarray())==0 else False)
+        #     constant_variables=np.array(constant_variables)
+
+        #     X_train = X_train[:, ~constant_variables]
+        #     X_test = X_test[:, ~constant_variables]
+        #     columns = columns[~constant_variables]
+        
+        # if 'feature_selection' in params and params['feature_selection']:
+        #     clf = SelectKBest(f_classif, k=params['k_best_features'], ).fit(X_train, y_train)
+        #     X_train = clf.transform(X_train)
+        #     X_test = clf.transform(X_test)
+        #     columns = clf.transform(columns.reshape(1,-1))[0,:]
+
+        # ---------- ---------- ---------- ---------- ---------- ---------- ---------- ---------- 
+        # OVER or UNDER SAMPLING (CHANGING NUMBER OF INSTANCES):
+        # ---------- ---------- ---------- ---------- ---------- ---------- ---------- ----------
+
+        SAMPLING_SEED = 1270833263
+        sampling_random_state = np.random.RandomState(SAMPLING_SEED)
+
+        if params['under_sample_majority_class']:
+            assert not params['over_sample_minority_class']
+            assert not params['smote_and_undersampling']
+
+            under_sampler = RandomUnderSampler(sampling_strategy=1, random_state=sampling_random_state)
+            print('Under Sampling development set before calling fit ....')
+
+            # Under sampling:
+            X_development, y_development = under_sampler.fit_resample(X_development, y_development)
+            print(f'resampled(X_development).shape = {X_development.shape}')
+            print(f'resampled(y_development).shape = {y_development.shape}')
+
+        elif params['over_sample_minority_class']:
+            assert not params['under_sample_majority_class']
+            assert not params['smote_and_undersampling']
+
+            over_sample = SMOTE(sampling_strategy=1, random_state=sampling_random_state)
+            print('Over Sampling development set before calling fit ....')
+
+            X_development, y_development = over_sample.fit_resample(X_development, y_development)
+            print(f'resampled(X_development).shape = {X_development.shape}')
+            print(f'resampled(y_development).shape = {y_development.shape}')
+
+        elif params['smote_and_undersampling']:
+            assert not params['under_sample_majority_class']
+            assert not params['over_sample_minority_class']
+
+            over = SMOTE(sampling_strategy=params['over_sampling_ration'], 
+                         random_state=sampling_random_state
+                         )
+            under = RandomUnderSampler(sampling_strategy=params['under_sampling_ration'], 
+                                       random_state=sampling_random_state
+                                       )
+            
+            steps = [('o', over), 
+                     ('u', under)]
+            
+            pipeline = Pipeline(steps=steps)
+            print('Applying both under and over sampling ....')
+
+            X_development, y_development = pipeline.fit_resample(X_development, y_development)
+            print(f'resampled(X_development).shape = {X_development.shape}')
+            print(f'resampled(y_development).shape = {y_development.shape}')
+
+        else:
+            print('Using X_development, y_development, no samplig strategy ...')
+
+
+
+        # ---------- ---------- ---------- ---------- ---------- ---------- ---------- ----------
+        # REMOVING CONSTANT VARIABLES (CHANGING NUMBER OF COLUMNS, need to update all matrices)
+        # ---------- ---------- ---------- ---------- ---------- ---------- ---------- ----------
+        print('Looking for constant variables ...')
+        columns = np.array(columns) 
+        # if params['under_sample_majority_class'] or params['smote_and_undersampling']:
+        #     print('Using time efficient solution')
+        #     # Time efficient not memory efficient (.toarray to entire matrice)
+        #     constant_variables = np.var(X_train.toarray(),axis=0)==0
+        # else:
+            # Time inefficient but memory efficient (only used when undersampling (less instances))
+            # print('Using memory efficient solution')
+            # constant_variables = np.array(list(
+            #     map(lambda ix: True if np.var(X_train[:,ix].toarray())==0 else False, range(X_train.shape[1]))
+            # ))
+        print('Using memory efficient solution')
+        constant_variables = np.array(list(
+            map(lambda ix: True if np.var(X_development[:,ix].toarray())==0 else False, range(X_development.shape[1]))
+        ))
+
+
+        if np.sum(constant_variables)>0:
+            # X = X[:,~constant_variables]
+            X_development = X_development[:,~constant_variables]
+            X_heldout = X_heldout[:,~constant_variables]
+            columns = columns[~constant_variables]
+            print(f'Removed {np.sum(constant_variables)} columns')
+        else:
+            print('Not constant variables found ...')
+
+        # ---------- ---------- ---------- ---------- ---------- ---------- ---------- ----------
+        # FEATURE SELECTION (CHANING COLUMNS, NEED TO UDPATE ALL MATRICES)
+        # ---------- ---------- ---------- ---------- ---------- ---------- ---------- ----------
+        print('Shapes of matrices before FS...')
+        print(f'X_development: {X_development.shape}')
+        print(f'y_development: {y_development.shape}')
+        print(f'X_heldout:  {X_heldout.shape}')
+        print(f'y_heldout:  {y_heldout.shape}')
+
+        if 'feature_selection' in params and params['feature_selection']:
+            print('Applying feature selection')
+            clf = SelectKBest(f_classif, k=params['k_best_features'], ).fit(X_development, y_development)
+            X_development = clf.transform(X_development)
+            X_heldout = clf.transform(X_heldout)
+            columns = clf.transform(columns.reshape(1,-1))[0,:]
+
+        return X_development, y_development, X_heldout, y_heldout, columns
+
+
+
+
+
+
+
+        # config = configuration.get_config()
+        # logging = logger.init_logger(config['all_experiments_log'])
+        # columns = []
+
+
+        # # ---------- ---------- ---------- ---------- ---------- ---------- ---------- ---------- 
+        # # RETRIEVING TRAIN AND TEST
+        # # ---------- ---------- ---------- ---------- ---------- ---------- ---------- ----------
+        # combining_diagnoses = True if 'combining_diagnoses' in params and params['combining_diagnoses'] else False 
+        # combining_interventions = True if 'combining_interventions' in params and params['combining_interventions'] else False 
+        
+        # print(f'Calling Admission.get_training_testing_date(combining_diagnoses={combining_diagnoses}, combining_interventions={combining_interventions})')
+        # heldout_admissions = Admission.get_heldout_data(combining_diagnoses=combining_diagnoses,
+        #                                                 combining_interventions=combining_interventions
+        #                                                 )
+        
+
+        # if params['fix_missing_in_testing']:
+        #     for admission in heldout_admissions:
+        #         admission.fix_missings(heldout_admissions)
+
+        # # ---------- ---------- ---------- ---------- ---------- ---------- ---------- ---------- 
+        # # TRAINING MATRIX
+        # # ---------- ---------- ---------- ---------- ---------- ---------- ---------- ---------- 
+        # features = []
+        # if params['numerical_features']:
+        #     numerical_df = Admission.numerical_features(heldout_admissions,)
+        #     columns += list(numerical_df.columns)
+        #     if params['remove_outliers']:
+        #         stds = np.std(numerical_df)
+        #         mean = np.mean(numerical_df, axis=0)
+        #         is_outlier=np.sum(numerical_df.values > (mean+4*stds).values, axis=1)>0
+            
+        #     if params['fix_skew']:
+        #         numerical_df['case_weight'] = np.log10(numerical_df['case_weight']+1)
+        #         numerical_df['acute_days'] = np.log10(numerical_df['acute_days']+1)
+        #         numerical_df['alc_days'] = np.log10(numerical_df['alc_days']+1)
+
+        #     if params['normalize']:
+        #         scaler = StandardScaler()
+        #         if params['remove_outliers']:
+        #             scaler.fit(numerical_df.values[~is_outlier,:])
+        #         else:
+        #             scaler.fit(numerical_df.values)
+        #         numerical_df = pd.DataFrame(scaler.transform(numerical_df.values), columns=numerical_df.columns)
+
+        #     features.append(sparse.csr_matrix(numerical_df.values))
+
+        # if params['categorical_features']:
+        #     categorical_df, main_pt_services_list = Admission.categorical_features(heldout_admissions)
+        #     columns += list(categorical_df.columns)
+        #     features.append(sparse.csr_matrix(categorical_df.values))
+
+        # if params['diagnosis_features']:
+        #     min_df = params['min_df'] if 'min_df' in params else 1
+        #     vocab_diagnosis, diagnosis_matrix = Admission.diagnosis_codes_features(heldout_admissions,
+        #                                                                            use_idf=params['use_idf'],
+        #                                                                            min_df=min_df,
+        #                                                                           )
+        #     features.append(diagnosis_matrix)
+        #     columns += list(vocab_diagnosis)
+
+
+        # if params['intervention_features']:
+        #     min_df = params['min_df'] if 'min_df' in params else 1
+        #     vocab_interventions, intervention_matrix = Admission.intervention_codes_features(heldout_admissions,
+        #                                                                                      min_df=min_df,
+        #                                                                                      use_idf=params['use_idf'],
+        #                                                                                     )
+        #     features.append(intervention_matrix)
+        #     columns += list(vocab_interventions)
+
+        # if 'diagnosis_embeddings' in params and params['diagnosis_embeddings']:
+        #     print(f"Loading diagnosis embeddings from model: {params['diag_embedding_model_name']}")
+        #     # If combining diagnosis then cannot use cached (cached embeddings are not combined)
+        #     use_cached = not combining_diagnoses
+        #     diagnosis_embeddings_df = Admission.diagnosis_embeddings(heldout_admissions,
+        #                                                              model_name=params['diag_embedding_model_name'],
+        #                                                              use_cached=use_cached,
+        #                                                              )
+        #     print(f"Diagnosis model loaded. Shape of diag_emb_df={diagnosis_embeddings_df.shape}")
+
+        #     features.append(sparse.csr_matrix(diagnosis_embeddings_df.values))
+        #     columns += list(diagnosis_embeddings_df.columns)
+
+        # if 'intervention_embeddings' in params and params['intervention_embeddings']:
+        #     print(f"Loading intervention embeddings from model: {params['interv_embedding_model_name']}")
+        #     # If combining intervention then cannot use cached (cached embeddings are not combined)
+        #     use_cached = not combining_interventions
+
+        #     intervention_embeddings_df = Admission.intervention_embeddings(heldout_admissions,
+        #                                                              model_name=params['interv_embedding_model_name'],
+        #                                                              use_cached=use_cached
+        #                                                              )
+        #     print(f"Intervention model loaded. Shape of interv_emb_df={intervention_embeddings_df.shape}")
+        #     features.append(sparse.csr_matrix(intervention_embeddings_df.values))
+        #     columns += list(intervention_embeddings_df.columns)
+
+        # if params['remove_outliers'] and params['numerical_features']:
+        #     mask=~is_outlier
+        # else:
+        #     mask = np.ones(shape=(len(heldout_admissions)))==1
+
+        # for ix, matrix in enumerate(features):
+        #     print(f'{ix:2} matrix.shape={matrix.shape}')
+        # X = sparse.hstack([matrix[mask,:] for matrix in features])
+        # y = Admission.get_y(heldout_admissions)[mask]
+
+
+        # columns = np.array(columns)
+
+
+
+
+        # # ---------- ---------- ---------- ---------- ---------- ---------- ---------- ----------
+        # # REMOVING CONSTANT VARIABLES (CHANGING NUMBER OF COLUMNS, need to update all matrices)
+        # # ---------- ---------- ---------- ---------- ---------- ---------- ---------- ----------
+        # print('Looking for constant variables ...')
+        # columns = np.array(columns) 
+
+
+        # print('Using memory efficient solution')
+        # constant_variables = np.array(list(
+        #     map(lambda ix: True if np.var(X[:,ix].toarray())==0 else False, range(X.shape[1]))
+        # ))
+
+
+        # if np.sum(constant_variables)>0:
+        #     # X = X[:,~constant_variables]
+        #     X = X[:,~constant_variables]
+        #     columns = columns[~constant_variables]
+        #     print(f'Removed {np.sum(constant_variables)} columns')
+        # else:
+        #     print('Not constant variables found ...')
+
+        # # ---------- ---------- ---------- ---------- ---------- ---------- ---------- ----------
+        # # FEATURE SELECTION (CHANING COLUMNS, NEED TO UDPATE ALL MATRICES)
+        # # ---------- ---------- ---------- ---------- ---------- ---------- ---------- ----------
+        # print('Shapes of matrices before FS...')
+        # print(f'X: {X.shape}')
+        # print(f'y: {y.shape}')
+
+
+        # # if 'feature_selection' in params and params['feature_selection']:
+        # #     print('Applying feature selection')
+        # #     clf = SelectKBest(f_classif, k=params['k_best_features'], ).fit(X_train, y_train)
+        # #     X_train = clf.transform(X_train)
+        # #     X_test = clf.transform(X_test)
+        # #     columns = clf.transform(columns.reshape(1,-1))[0,:]
+
+        # return X, y, columns
